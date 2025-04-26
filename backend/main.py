@@ -1,101 +1,170 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
+import logging
 from dotenv import load_dotenv
-from pypdf import PdfReader
-from openai import OpenAI
-import io
+from typing import List, Optional, Dict
+from pydantic import BaseModel
+import time
+from google.api_core import exceptions as GoogleAPIErrors
 
-# Load environment variables from .env file
+# Import specific exceptions from LLM services
+from openai import APIError as OpenAIAPIError
+from anthropic import APIError as AnthropicAPIError
+
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
-# --- Add CORS Middleware ---
+# CORS Middleware Configuration
 origins = [
-    "http://localhost:3000", # Allow your Next.js frontend
-    "http://127.0.0.1:3000", # Also allow this variation
+    "http://localhost:3000", 
+    "http://127.0.0.1:3000", 
+    "http://localhost:3010", 
+    "http://127.0.0.1:3010", 
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # List of origins allowed
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# --- End CORS Middleware ---
 
-# Initialize OpenAI client
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    print("Warning: OPENAI_API_KEY not found in .env file. Summarization will fail.")
-    client = None
-else:
-    client = OpenAI(api_key=openai_api_key)
+# --- Pydantic Models ---
+class PubMedQuery(BaseModel):
+    query: str
+    max_results: Optional[int] = 10
+
+class PubMedArticle(BaseModel):
+    title: str
+    abstract: Optional[str] = None
+    url: str
+
+# Import the new service functions
+from backend.services.evidence_retriever import search_pubmed
+from backend.services.llm_service import (
+    get_available_pdf_models,
+    summarize_pdf_auto,  
+)
 
 @app.get("/")
 def read_root():
     return {"message": "AI Health Records API is running!"}
-
 
 # Example endpoint
 @app.get("/hello")
 def hello_world():
     return {"message": "Hello World"}
 
+# --- New Endpoint for Available Models ---
+@app.get("/available-models/")
+async def available_models():
+    """Returns a dictionary of available PDF-capable models grouped by provider."""
+    logger.info("Request received for /available-models/")
+    try:
+        models = await get_available_pdf_models()
+        return models
+    except Exception as e:
+        logger.error(f"Unexpected error in /available-models/ endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred while retrieving available models.")
+
+# Endpoint to list available models
+@app.get("/models/")
+async def list_models():
+    """
+    Endpoint to get a list of available models suitable for PDF summarization,
+    grouped by provider. Fetches dynamically where implemented.
+    """
+    try:
+        models = await get_available_pdf_models()
+        if not models or all(not v for v in models.values()):
+             # Handle cases where fetching might fail for all providers
+             raise HTTPException(status_code=503, detail="Could not retrieve models from providers.")
+        return models
+    except Exception as e:
+        logging.error(f"Error retrieving available models: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error retrieving models.")
 
 @app.post("/summarize-pdf/")
-async def summarize_pdf(file: UploadFile = File(...)):
-    if not client:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured.")
+async def summarize_pdf(
+    provider: str = Form(...),
+    model_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """Receives a PDF file, provider, and model ID, and returns a summary."""
+    start_time = time.time()
+    logger.info(f"Received PDF summarization request for file: {file.filename}, provider: {provider}, model: {model_id}")
 
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF.")
+    # Basic validation
+    if provider not in ["openai", "google", "anthropic"]:
+        logger.warning(f"Invalid provider specified: {provider}")
+        raise HTTPException(status_code=400, detail="Invalid provider specified. Choose 'openai', 'google', or 'anthropic'.")
+
+    if not file.filename:
+        logger.warning("File upload request received without a filename.")
+        raise HTTPException(status_code=400, detail="No filename provided with the upload.")
+
+    if not file.filename.lower().endswith(".pdf"):
+        logger.warning(f"Invalid file type uploaded: {file.filename}")
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PDF files are accepted.")
 
     try:
-        # Read PDF content
-        pdf_content = await file.read()
-        pdf_stream = io.BytesIO(pdf_content)
-        reader = PdfReader(pdf_stream)
-        
-        text = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text: # Check if text extraction was successful
-                text += page_text + "\n"
+        # Call the refactored service function
+        summary = await summarize_pdf_auto(provider=provider, model_id=model_id, pdf_file=file)
+        end_time = time.time()
+        processing_time = end_time - start_time
+        logger.info(f"Successfully summarized {file.filename} in {processing_time:.2f} seconds using {provider} model {model_id}.")
+        return {"summary": summary}
 
-        if not text:
-             raise HTTPException(status_code=400, detail="Could not extract text from PDF. The PDF might be image-based or empty.")
-
-        # Prepare the prompt based on product_spec.md
-        prompt = f"""
-        You are a clinical summarization assistant. Given the following medical record text extracted from a PDF, please extract key information such as demographics, chief complaint, history of present illness, past medical history, medications, allergies, physical examination findings, laboratory results, imaging results, diagnoses/assessment, and treatment plan. 
-
-        Format the output clearly, first listing extracted entities perhaps in a structured format (like key-value pairs or a table if appropriate), and then provide a concise narrative summary suitable for a clinician's quick review.
-
-        Extracted Text:
-        {text}
-        """
-
-        # Call OpenAI API for summarization (using GPT-4 Turbo as specified)
-        completion = client.chat.completions.create(
-            model="gpt-4-turbo", # Specified in product_spec.md
-            messages=[
-                {"role": "system", "content": "You are a clinical summarization assistant."}, 
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        summary = completion.choices[0].message.content
-        return {"filename": file.filename, "summary": summary}
-
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions raised from the service layer (e.g., conversion failure)
+        logger.error(f"HTTPException during summarization for {file.filename}: {http_exc.detail}")
+        raise http_exc
+    except ValueError as ve:
+        # Catch ValueErrors (e.g., unsupported provider from service layer, though unlikely now)
+        logger.error(f"ValueError during summarization for {file.filename}: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except (OpenAIAPIError, GoogleAPIErrors.GoogleAPIError, AnthropicAPIError) as api_error:
+        # Specific API errors caught in service, re-raised, caught here
+        logger.error(f"API Error during summarization for {file.filename} with {provider}: {api_error}", exc_info=True)
+        # Provide a generic message to the client
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with the {provider.capitalize()} API.")
     except Exception as e:
-        print(f"Error processing PDF: {e}") # Log the error server-side
-        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+        # Catch-all for other unexpected errors
+        logger.critical(f"Unexpected error during summarization for {file.filename}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during summarization.")
 
+# --- New Endpoint for PubMed Search ---
+@app.post("/retrieve-evidence/pubmed", response_model=List[Dict[str, Optional[str]]])
+async def retrieve_pubmed_evidence(pubmed_query: PubMedQuery):
+    """
+    Accepts a query and searches PubMed via the evidence_retriever service.
+    """
+    logger.info(f"Received PubMed search request: query='{pubmed_query.query}', max_results={pubmed_query.max_results}")
+    try:
+        results = search_pubmed(
+            query=pubmed_query.query,
+            max_results=pubmed_query.max_results
+        )
+        if not results:
+            raise HTTPException(status_code=404, detail="No PubMed articles found for the query or an error occurred during the search.")
+        return results
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.exception(f"Error during PubMed search for query: '{pubmed_query.query}'")
+        raise HTTPException(status_code=500, detail="Internal server error retrieving PubMed evidence.")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000)) # Default to 8000 if PORT not set
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True) # Enable reload for development
+    port = int(os.getenv("PORT", 8000))
+    logger.info(f"Starting Uvicorn server on port {port} with reload enabled.")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
