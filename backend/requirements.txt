@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-dotenv # For environment variables
+pypdf # For PDF text extraction
+openai # For OpenAI API interaction
+python-multipart # For FastAPI File uploads

@@ -52,7 +52,7 @@ digraph LR
 - **Frontend:** Next.js, React, Tailwind CSS  
 - **Backend:** Python 3.11, FastAPI, Uvicorn  
 - **Database:** PostgreSQL (relational), Neo4j (knowledge graph)  
-- **LLM APIs:** OpenAI GPT-4 Turbo, Anthropic Claude 3.7, Google Gemini Advanced  
+- **LLM APIs:** OpenAI, Gemini, Anthropic Latest LLM and Reasoning Models 
 - **Indexing:** Chroma or Weaviate embeddings store
 
 ## Security & Compliance
