@@ -64,6 +64,7 @@ To handle diverse PDF document types effectively (digitally native text, scanned
   - Integrates optional schema data from a JSON file.
   - Utilizes parallel processing (`concurrent.futures`) for performance.
   - Outputs Markdown files to a configurable directory (defaults to adjacent directory).
+  - **Integrated into backend via `/ingest/ehr` POST endpoint using BackgroundTasks.**
 - **PDF Ingestion:**
   - Basic PDF upload endpoint (`/summarize-pdf/`) implemented.
   - Hybrid PDF processing strategy implemented (`pdf_utils.py`):
@@ -95,7 +96,8 @@ Based on the current status and project goals, the following development phases 
      - Add support for raw `.txt` file ingestion.
      - Implement DICOM file ingestion using `pydicom` (metadata extraction, passing image data to vision models).
      - **Completed:** Initial EHR TSV file parsing and Markdown conversion (`ehr_parser.py`).
-     - **Next Steps:** Integrate `ehr_parser.py` into the backend service/API workflow. Explore parsing other EHR formats (C-CDA, FHIR JSON/XML).
+     - **Completed:** Integrated `ehr_parser.py` into the backend service via the `/ingest/ehr` API endpoint.
+     - **Next Steps:** Explore parsing other EHR formats (C-CDA, FHIR JSON/XML). Add more robust error handling and status tracking for background ingestion tasks.
 3. **Prompt Engineering & Core LLM Functions:**
      - Develop and refine prompts for high-quality **Summarization** across different record types.
      - Develop initial prompts for **Diagnostic Support** (e.g., differential diagnoses based on summary).
