@@ -8,8 +8,7 @@ An AI health web app to ingest arbitrary medical data (text, PDF, images, EHR ex
 
 - **Data Ingestion & Parsing**
   - Feed raw files (PDF, text, image, EHR exports) directly to cloud LLM document-understanding endpoints (e.g., OpenAI’s Document API, Anthropic’s DocReader) for entity extraction and chunked summarization.
-  - Minimal local preprocessing: OCR with Tesseract for images; metadata extraction via Python libraries when needed.
-
+  
 - **Structured Data Handling**
   - Parse FHIR/HL7/C-CDA exports using lightweight Python libraries, then pass JSON to LLMs for normalization.
 

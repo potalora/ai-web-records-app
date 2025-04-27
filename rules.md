@@ -1,6 +1,7 @@
 # rules.md
 
 ## 1. Core Objective
+
 The primary goal of this project is to build an AI-driven health web application that ingests diverse medical records and leverages LLMs to summarize, diagnose, recommend treatments, and locate specialists. Keep this objective front and center when generating or reviewing code.
 
 ## 2. Language & Style Conventions
@@ -47,6 +48,7 @@ The primary goal of this project is to build an AI-driven health web application
   * Unit & integration tests: Jest (TS), Pytest (Python)  
   * E2E tests: Playwright  
   * Place test files alongside code (e.g., `service.test.ts`).
+  * Unit tests should ideally be written concurrently with the code they test to facilitate TDD/BDD principles and ensure immediate feedback.
 * **API Client:** Use the shared Axios instance in `src/apiClient.ts` for external calls.
 
 ## 5. Domain-Specific Knowledge
@@ -66,6 +68,7 @@ The primary goal of this project is to build an AI-driven health web application
 
 ## 7. Task-Specific Instructions
 
+* **Converting Ingested Files:** All ingested source files (e.g., TSV, RTF, TXT) must be parsed and converted into Markdown (.md) format before being passed to LLMs for summarization, analysis, or other processing steps. This ensures a consistent input format for the language models.
 * **Adding a New Ingestion Pipeline:**  
   1. Implement parser under `src/services/ingestion/`.  
   2. Define validation schemas in `src/schemas/` (Zod/Pydantic).  

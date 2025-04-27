@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+develop-eggs/
 dist/
 downloads/
 eggs/
@@ -19,6 +20,8 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -41,18 +44,16 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
-.pytest_cache/
-.hypothesis/
 nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
+.pytest_cache/
 
 # Translations
 *.mo
 *.pot
-*.log
 
 # Django stuff:
 *.log
@@ -83,25 +84,26 @@ ipython_config.py
 # pyenv
 .python-version
 
-# PEP 582; used by PDM, Pyflow and pdm
+# pipenv
+# According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+# Pipfile.lock
+
+# poetry
+# Poetry installs packages to virtualenvs/ by default. Add this to .gitignore if using pyenv or similar.
+# virtualenvs/
+poetry.lock
+
+# PEP 582; automatically picks up dependencies from this directory.
 __pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
 .venv
+env/
 venv/
 ENV/
-env/
-ENV/
-/env.bak/
-/venv.bak/
+env.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -111,7 +113,7 @@ ENV/
 .ropeproject
 
 # mkdocs documentation
-/site/
+/site
 
 # mypy
 .mypy_cache/
@@ -121,13 +123,18 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Node.js
-node_modules/
-npm-debug.log
-yarn-error.log
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
+# pytype static type analyzer
+.pytype/
 
-# macOS
+# OS Files
 .DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+
+# Large Data Directories (adjust paths as needed)
+/Users/potalora/Downloads/Requested Record/EHITables/
+/Users/potalora/Downloads/Requested Record/EHITables_Markdown/
+# Add other large data/output directories if necessary
