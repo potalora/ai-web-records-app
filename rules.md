@@ -89,3 +89,10 @@ The primary goal of this project is to build an AI-driven health web application
 * Cascade must **always** determine LLM availability and capabilities (e.g., multimodal support) based **strictly** on the results returned by the relevant provider's API call (e.g., `list_models`).
 * Cascade must **never** use its internal knowledge base or assumptions about which models *should* be available or *should* have certain features (like vision).
 * If a dynamically selected model from the API list turns out not to support a required feature (like image input for a specific task), a pre-defined fallback strategy will be employed (e.g., using a known compatible model from `constants.py` or raising an error).
+
+## 9. Development Workflow
+
+* **Milestone Completion:** After successfully implementing and testing a significant feature or completing a development milestone (e.g., adding a new API endpoint, integrating a major component), always perform the following steps:
+  1. **Refactor:** Review the new code for clarity, efficiency, and adherence to project standards. Refactor as needed.
+  2. **Commit:** Stage and commit the changes with a clear, descriptive commit message following conventional commit guidelines (e.g., `feat: ...`, `fix: ...`, `refactor: ...`, `docs: ...`).
+  3. **Document:** Update relevant documentation (e.g., `README.md`, `docs/product_spec.md`, code comments/docstrings) to reflect the changes.
