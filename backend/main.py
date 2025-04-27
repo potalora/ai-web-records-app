@@ -8,11 +8,10 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel
 import time
 from google.api_core import exceptions as GoogleAPIErrors
-from backend.services.evidence_retriever import search_pubmed
-from backend.services.model_registry import (
+from backend.src.services.model_registry import (
     get_available_pdf_models,
 )
-from backend.services.llm_service import (
+from backend.src.services.llm_service import (
     summarize_pdf_auto,
 )
 
@@ -20,13 +19,18 @@ from backend.services.llm_service import (
 from openai import APIError as OpenAIAPIError
 from anthropic import APIError as AnthropicAPIError
 
-# Import FHIR parser and exception
-from backend.utils.ehr_parser import parse_fhir_resource, FHIRParsingError
+# Remove FHIR loading/parsing from main.py - should be handled in services
 
 # Import libraries for temp file handling
 import shutil
 import tempfile
 from pathlib import Path
+
+# Import the ingestion router from backend.src.routes.ingestion_routes with an alias
+from backend.src.routes.ingestion_routes import router as ingestion_router
+
+# --- Fix import path for evidence_retriever --- #
+from backend.src.services.evidence_retriever import search_pubmed # Corrected path
 
 load_dotenv()
 
@@ -56,6 +60,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include the ingestion router using the alias
+app.include_router(ingestion_router)
 
 # --- Pydantic Models ---
 class PubMedQuery(BaseModel):

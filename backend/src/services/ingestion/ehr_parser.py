@@ -7,8 +7,8 @@ import json
 from io import StringIO
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import concurrent.futures # Added import
-import functools # Added import
+import concurrent.futures 
+import functools 
 
 # Configure logging
 # Set level to INFO for less verbose output during normal runs
@@ -149,252 +149,180 @@ def tsv_to_markdown(tsv_content: str, filename: str, schema_data: Optional[Dict[
     return markdown_output
 
 
-# --- ENSURE THIS FUNCTION IS DEFINED ---
-def process_directory(input_dir: Path, output_dir: Path, schema_data: Optional[Dict[str, Any]] = None):
-    """Processes all TSV files in the input directory and saves them as Markdown.
+# --- Individual File Processing --- # Renamed section comment
+def process_file(file_path: Path, output_dir: Path, schema_data: Optional[Dict[str, Any]] = None):
+    """Processes a single TSV file and writes its Markdown representation.
 
     Args:
-        input_dir: Path to the input directory containing TSV files.
-        output_dir: Path to the output directory for Markdown files.
-        schema_data: Optional dictionary containing schema info for all tables.
+        file_path: Path to the input TSV file.
+        output_dir: Path to the output directory.
+        schema_data: Optional dictionary containing schema info for the table.
+
+    Returns:
+        None on success. Can be modified to return status or error info.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    file_count = 0
-    processed_count = 0
-    error_count = 0
-    skipped_count = 0
-    encodings_to_try = ['utf-8', 'cp1252', 'latin-1'] # Add more if needed
+    logger.debug(f"Starting processing for file: {file_path.name}")
+    encodings_to_try = ['utf-8', 'cp1252', 'latin-1'] # Common encodings
+    detected_encoding = detect_encoding(file_path, encodings_to_try)
 
-    logger.info(f"Starting processing from '{input_dir}' to '{output_dir}'.")
-    if schema_data:
-        logger.info(f"Loaded schema data for {len(schema_data)} tables.")
-    else:
-        logger.warning("No schema data provided or loaded. Markdown files will not include schema details.") # Changed to warning
+    if not detected_encoding:
+        logger.error(f"Failed to decode {file_path.name} with tried encodings: {', '.join(encodings_to_try)}. Skipping.")
+        return # Indicate error or skip
 
-    # Iterate through items in the input directory
-    items = list(input_dir.iterdir()) # Convert iterator to list for progress feedback
-    total_items = len(items)
-    logger.info(f"Found {total_items} items in the input directory.")
+    try:
+        # Read content using the detected encoding
+        tsv_content = read_tsv_content(file_path, detected_encoding)
 
-    for i, item in enumerate(items):
-        # Provide progress update every 500 files or for the last file
-        if (i + 1) % 500 == 0 or (i + 1) == total_items:
-            logger.info(f"Processing item {i + 1}/{total_items}: {item.name}")
+        # Check if the file is empty or only contains whitespace after reading
+        if not tsv_content.strip():
+            logger.warning(f"File {file_path.name} is empty or contains only whitespace after reading. Skipping.")
+            return # Indicate skip
 
-        if item.is_file() and item.suffix.lower() == '.tsv':
-            file_count += 1
-            logger.debug(f"Processing file: {item.name}...") # Keep debug for individual file start
-            detected_encoding = detect_encoding(item, encodings_to_try)
-
-            if not detected_encoding:
-                logger.error(f"Failed to decode {item.name} with tried encodings: {', '.join(encodings_to_try)}")
-                error_count += 1
-                continue # Skip this file
-
-            try:
-                content = read_tsv_content(item, detected_encoding)
-                # Pass schema_data to tsv_to_markdown
-                markdown_content = tsv_to_markdown(content, item.name, schema_data)
-
-                if not markdown_content:
-                    # tsv_to_markdown already logged the warning for empty/header-only files
-                    skipped_count += 1 # Count skipped files separately
-                    continue # Don't write an empty file or count as error
-
-                # Write the generated Markdown content
-                output_filename = output_dir / (item.stem + ".md")
-                with open(output_filename, 'w', encoding='utf-8') as f:
-                    f.write(markdown_content)
-                processed_count += 1
-
-            except Exception as e:
-                # Catch errors during read or markdown generation
-                logger.error(f"Failed to process {item.name}: {e}", exc_info=True)
-                error_count += 1
-        else:
-            logger.debug(f"Skipping non-TSV file or directory: {item.name}")
-
-
-    logger.info(f"Processing complete. Total TSV files found: {file_count}. Processed successfully: {processed_count}. Files skipped (empty/header-only): {skipped_count}. Errors: {error_count}.")
-
-
-def process_file(file_path: Path, output_dir: Path, schema_data: Optional[Dict[str, Any]] = None):
-    """Processes a single TSV file and writes its Markdown representation to the output directory."""
-    logger.debug(f"Starting processing for file: {file_path.name}")  # Added log
-    encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
-    tsv_content = None
-    detected_encoding = None
-
-    for encoding in encodings_to_try:
-        try:
-            logger.debug(f"Attempting to read {file_path.name} with encoding: {encoding}")
-            with open(file_path, 'r', encoding=encoding) as file:
-                tsv_content = file.read()
-            detected_encoding = encoding
-            logger.debug(f"Successfully read {file_path.name} with encoding: {encoding}")
-            break  # Stop trying encodings if one works
-        except UnicodeDecodeError:
-            logger.debug(f"Failed to decode {file_path.name} with encoding: {encoding}")
-            continue  # Try the next encoding
-        except Exception as e:
-            logger.error(f"Unexpected error reading {file_path.name} with encoding {encoding}: {e}")
-            return # Stop processing this file on other read errors
-
-    if tsv_content is None:
-        logger.error(f"Could not read file {file_path.name} with any attempted encoding. Skipping.")
-        return
-
-    # Check if the file is empty or only contains whitespace
-    if not tsv_content.strip():
-        logger.warning(f"File {file_path.name} is empty or contains only whitespace. Skipping.")
-        return
-
-    try: # Added try block
-        # Use csv.reader to handle potential quoting and delimiter issues robustly
-        # Increase the field size limit for potentially large fields
-        csv.field_size_limit(2**20) # 1MB limit, adjust if needed
-        reader = csv.reader(StringIO(tsv_content), delimiter='\t', quotechar='"')
-
-        # Check for header and data rows
-        try:
-            header = next(reader)
-            # Try to get the first data row to see if there's content
-            first_data_row = next(reader)
-            # Reset reader by creating a new one if we need to process all rows
-            reader = csv.reader(StringIO(tsv_content), delimiter='\t', quotechar='"')
-            # Skip header again for markdown conversion
-            next(reader)
-            has_data = True
-        except StopIteration:
-            # This means there was only a header or the file was truly empty after stripping
-            has_data = False
-            logger.warning(f"File {file_path.name} has header but no data rows. Skipping content generation.")
-        except csv.Error as e:
-            logger.error(f"CSV Error reading header/first row of {file_path.name}: {e}. Skipping.")
-            return
-
-        if not has_data:
-            # Even if no data, we might still want an empty markdown file or one with just the schema
-            # For now, we skip as per the warning log
-            return
-        # Pass the original full content to tsv_to_markdown, it will handle reading again if needed
+        # Convert to Markdown
         markdown_content = tsv_to_markdown(tsv_content, file_path.name, schema_data)
 
-    except Exception as e: # Added except block
-        logger.error(f"Error during initial CSV processing or markdown conversion for {file_path.name}: {e}", exc_info=True)
-        return # Stop processing this file if CSV parsing fails
+        if not markdown_content:
+             # tsv_to_markdown logs warnings for header-only files or parsing errors resulting in empty content
+             logger.warning(f"No Markdown content generated for {file_path.name}. Skipping file write.")
+             return # Indicate skip or specific status if needed
 
-    output_file_path = output_dir / f"{file_path.stem}.md"
-    try:
+        # Write the generated Markdown content
+        output_file_path = output_dir / f"{file_path.stem}.md"
         with open(output_file_path, 'w', encoding='utf-8') as file:
             file.write(markdown_content)
-        # logger.info(f"Successfully converted {file_path.name} to {output_file_path.name}")
-    except IOError as e:
-        logger.error(f"Could not write markdown file {output_file_path.name}: {e}")
+        # logger.info(f"Successfully converted {file_path.name} to {output_file_path.name}") # Too verbose for parallel
+
     except Exception as e:
-        logger.error(f"An unexpected error occurred while writing {output_file_path.name}: {e}")
+        logger.error(f"Failed to process {file_path.name} during read/convert/write: {e}", exc_info=True)
+        return # Indicate error
+
+    return None # Indicate success
 
 
-if __name__ == "__main__":
+# --- Main Parsing Orchestration --- # Added new function
+def run_ehr_parsing(input_dir: str, output_dir: Optional[str] = None, schema_json: Optional[str] = None, verbose: bool = False):
+    """Runs the EHR TSV to Markdown conversion process.
+
+    Args:
+        input_dir: Path string to the input directory containing TSV files.
+        output_dir: Optional path string to the output directory. Defaults to adjacent dir.
+        schema_json: Optional path string to the JSON schema file.
+        verbose: If True, sets logging level to DEBUG.
+    """
     # --- Logging Setup ---
-    # Configure basic logging (level set later based on args)
-    # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    # logger = logging.getLogger(__name__) # Removed from here
+    log_level = logging.DEBUG if verbose else logging.INFO
+    # Ensure handlers are not added multiple times if called repeatedly
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    logger.setLevel(log_level)
 
-    # --- Argument Parsing & Setup ---
-    parser = argparse.ArgumentParser(description='Convert TSV files in a directory to Markdown tables, optionally enriching with schema data.')
-    parser.add_argument('input_dir', type=str, help='Input directory containing TSV files.')
-    parser.add_argument('--output-dir', type=str, default=None, help='Optional: Output directory for Markdown files. Defaults to <input_dir>_Markdown next to the input directory.') # Added optional arg
-    parser.add_argument('--schema-json', type=str, help='Optional path to the JSON file containing schema definitions.')
-    # Add verbose flag for debug prints
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable debug print statements.')
+    logger.info("--- Starting EHR Parsing --- ")
+    logger.debug(f"Verbose mode enabled.")
 
-    args = parser.parse_args()
+    # --- Path and Schema Handling ---
+    input_path = Path(input_dir)
+    if not input_path.is_dir():
+        logger.error(f"Input path is not a valid directory: {input_dir}")
+        return # Exit if input dir is invalid
 
-    # --- Configure Logging Level based on args ---
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
-    # logger is already defined globally, basicConfig configures the root logger which it inherits
-
-    input_path = Path(args.input_dir)
-    # Determine output directory path
-    if args.output_dir:
-        output_dir_path = Path(args.output_dir)
+    if output_dir:
+        output_dir_path = Path(output_dir)
         logger.info(f"Using specified output directory: {output_dir_path}")
     else:
         output_dir_path = input_path.parent / f"{input_path.name}_Markdown"
         logger.info(f"Output directory not specified, defaulting to: {output_dir_path}")
 
-    schema_json_path = Path(args.schema_json) if args.schema_json else None
+    output_dir_path.mkdir(parents=True, exist_ok=True)
 
+    schema_json_path = Path(schema_json) if schema_json else None
     loaded_schema_data = None
-    if schema_json_path:
-        if schema_json_path.is_file():
-            try:
-                with open(schema_json_path, 'r', encoding='utf-8') as f:
-                    loaded_schema_data = json.load(f)
-                logger.info(f"Successfully loaded schema data from {schema_json_path}")
-            except json.JSONDecodeError:
-                logger.error(f"Error: Failed to decode JSON from {schema_json_path}. Proceeding without schema data.", exc_info=True)
-            except Exception as e:
-                logger.error(f"Error loading schema JSON {schema_json_path}: {e}. Proceeding without schema data.", exc_info=True)
-        else:
-            logger.warning(f"Schema JSON file not found at {schema_json_path}. Proceeding without schema data.")
+    if schema_json_path and schema_json_path.is_file():
+        try:
+            with open(schema_json_path, 'r', encoding='utf-8') as f:
+                loaded_schema_data = json.load(f)
+            logger.info(f"Successfully loaded schema data from: {schema_json_path.name}")
+            logger.debug(f"Schema contains {len(loaded_schema_data)} table definitions.")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON schema file {schema_json_path.name}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error reading schema file {schema_json_path.name}: {e}", exc_info=True)
+    elif schema_json:
+         logger.warning(f"Schema file specified but not found or not a file: {schema_json_path}")
 
-    if not input_path.is_dir():
-        logger.error(f"Error: Input directory not found: {input_path}")
-        sys.exit(1) # Exit if input directory is invalid
+    if not loaded_schema_data:
+        logger.warning("Proceeding without schema data. Markdown files will not include schema details.")
 
-    # Call the main processing function
-    # file_count = 0 # Removed sequential count
-    # error_count = 0 # Removed sequential count
-    processed_count = 0
-
+    # Increase CSV field size limit
+    # Use a large but reasonable limit to prevent potential DoS via excessively large fields
+    new_limit = 1024 * 1024 # 1MB limit per field
     try:
-        all_files = list(Path(input_path).rglob('*.tsv')) # Get all files first
-        total_files = len(all_files)
-        logger.info(f"Found {total_files} TSV files to process.")
-
-        if total_files > 0:
-            # Create a partial function with fixed arguments for output_dir and schema_data
-            process_file_partial = functools.partial(
-                process_file, 
-                output_dir=output_dir_path, 
-                schema_data=loaded_schema_data
-            )
-
-            # Use ProcessPoolExecutor for parallel processing
-            # The number of workers defaults to the number of processors on the machine
-            with concurrent.futures.ProcessPoolExecutor() as executor:
-                logger.info(f"Starting parallel processing using up to {executor._max_workers} workers...")
-                
-                # map applies the function to each item in all_files
-                # We iterate through the results mainly to ensure completion and potentially catch errors
-                # Note: Exceptions in worker processes will be raised here when iterating results
-                results = executor.map(process_file_partial, all_files)
-
-                # Iterate over results to track progress and handle potential errors from map
-                for i, _ in enumerate(results):
-                    processed_count += 1 # Count successful iterations from map
-                    if (processed_count % 200 == 0) or (processed_count == total_files):
-                       logger.info(f"Processed {processed_count}/{total_files} files...")
-                    # Error handling for exceptions raised by map needs refinement
-                    # A simple count might not reflect true errors logged within workers
-                    # Consider adding try-except around the loop if needed, 
-                    # but relying on worker logs is often sufficient.
-
-        logger.info(f"Parallel processing finished. Attempted processing {total_files} files.")
-        # Note: Final error count relies on checking logs, as direct return from map is complex.
-
+        csv.field_size_limit(new_limit)
+        logger.debug(f"Set CSV field size limit to {new_limit} bytes.")
     except Exception as e:
-        # Catch errors during directory traversal or file listing
-        logger.critical(f"FATAL: Error during directory processing or executor setup: {e}", exc_info=True)
-        sys.exit(f"FATAL: Exiting due to error: {e}")
+        logger.error(f"Failed to set CSV field size limit: {e}")
+        logger.warning("Could not increase CSV field size limit. Processing may fail for files with very large fields.")
 
-    # Final Summary - Adjust based on parallel execution
-    logger.info(f"Script finished. Attempted processing for {total_files} files.")
-    logger.info(f"Check logs above for any specific file processing errors.")
-    # logger.info(f"Processed {file_count} files successfully.") # Removed old counts
-    # if error_count > 0:
-    #     logger.warning(f"{error_count} files encountered errors during processing.")
-    print("--- Script finished successfully ---") # Use print for final success message
+    # --- Parallel File Processing ---
+    tsv_files = [item for item in input_path.iterdir() if item.is_file() and item.suffix.lower() == '.tsv']
+    total_files = len(tsv_files)
+    logger.info(f"Found {total_files} TSV files to process.")
+
+    if not tsv_files:
+        logger.info("No TSV files found in the input directory. Exiting.")
+        return
+
+    # Use functools.partial to pass fixed arguments (output_dir, schema_data) to process_file
+    process_file_partial = functools.partial(process_file, output_dir=output_dir_path, schema_data=loaded_schema_data)
+
+    processed_count = 0
+    skipped_count = 0 # Track skips based on return value from process_file if modified
+    error_count = 0
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = {executor.submit(process_file_partial, file_path): file_path for file_path in tsv_files}
+
+        for future in concurrent.futures.as_completed(futures):
+            file_path = futures[future]
+            try:
+                result = future.result() # result is None on success, could indicate skip/error if modified
+                if result is None: # Assuming None means success
+                    processed_count += 1
+                    # logger.debug(f"Successfully processed: {file_path.name}") # Too verbose
+                # else: # Handle skipped/error results if process_file returns specific values
+                    # skipped_count += 1 # Example
+            except Exception as e:
+                logger.error(f"Error processing file {file_path.name} in worker: {e}", exc_info=True)
+                error_count += 1
+            finally:
+                 current_done = processed_count + error_count + skipped_count
+                 if current_done % 100 == 0 or current_done == total_files:
+                     logger.info(f"Progress: {current_done}/{total_files} files processed.")
+
+    logger.info("--- Processing Summary --- ")
+    logger.info(f"Total TSV files found: {total_files}")
+    logger.info(f"Successfully processed: {processed_count}")
+    logger.info(f"Skipped (e.g., empty/header-only/decode failed): {skipped_count}") # Requires process_file return status
+    logger.info(f"Errors (during worker execution): {error_count}")
+    logger.info(f"Markdown files saved to: {output_dir_path}")
+    logger.info("--- EHR Parsing Finished --- ")
+
+
+# --- Command-Line Interface --- # Added section comment
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Convert TSV files in a directory to Markdown tables, optionally enriching with schema data.')
+    parser.add_argument('input_dir', type=str, help='Input directory containing TSV files.')
+    parser.add_argument('--output-dir', type=str, default=None, help='Optional: Output directory for Markdown files. Defaults to <input_dir>_Markdown next to the input directory.')
+    parser.add_argument('--schema-json', type=str, help='Optional path to the JSON file containing schema definitions.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable debug print statements.')
+    args = parser.parse_args()
+
+    # Call the main orchestration function
+    run_ehr_parsing(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        schema_json=args.schema_json,
+        verbose=args.verbose
+    )

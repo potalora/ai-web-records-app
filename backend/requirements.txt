@@ -10,6 +10,7 @@ requests
 python-multipart
 lxml
 beautifulsoup4 # Added for HTML parsing
+PyMuPDF # Added for PDF processing (fitz module)
 
 # XML Parsing
 xmltodict
