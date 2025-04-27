@@ -52,9 +52,18 @@ To handle diverse PDF document types effectively (digitally native text, scanned
     - `pdf2image`: For converting image-based PDFs to processable images.
         - Requires system dependency: `poppler`.
 
-## Current Status (as of 2025-04-26)
+## Current Status (as of 2025-04-27)
 
 - **Core Backend:** FastAPI application structure established.
+- **Project Structure:** Refactored backend directory structure for clarity (services, ingestion, tests aligned).
+- **Version Control:** Git repository initialized with appropriate `.gitignore`.
+- **EHR Ingestion (TSV):**
+  - Implemented `ehr_parser.py` in `backend/src/services/ingestion/`.
+  - Handles batch processing of TSV files from a directory.
+  - Supports multiple file encodings.
+  - Integrates optional schema data from a JSON file.
+  - Utilizes parallel processing (`concurrent.futures`) for performance.
+  - Outputs Markdown files to a configurable directory (defaults to adjacent directory).
 - **PDF Ingestion:**
   - Basic PDF upload endpoint (`/summarize-pdf/`) implemented.
   - Hybrid PDF processing strategy implemented (`pdf_utils.py`):
@@ -85,7 +94,8 @@ Based on the current status and project goals, the following development phases 
 2. **Expanded Data Ingestion:**
      - Add support for raw `.txt` file ingestion.
      - Implement DICOM file ingestion using `pydicom` (metadata extraction, passing image data to vision models).
-     - Initial exploration of EHR file parsing (e.g., basic structure identification for formats like C-CDA or FHIR JSON/XML exports).
+     - **Completed:** Initial EHR TSV file parsing and Markdown conversion (`ehr_parser.py`).
+     - **Next Steps:** Integrate `ehr_parser.py` into the backend service/API workflow. Explore parsing other EHR formats (C-CDA, FHIR JSON/XML).
 3. **Prompt Engineering & Core LLM Functions:**
      - Develop and refine prompts for high-quality **Summarization** across different record types.
      - Develop initial prompts for **Diagnostic Support** (e.g., differential diagnoses based on summary).
