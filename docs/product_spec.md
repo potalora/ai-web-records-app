@@ -87,7 +87,10 @@ Based on the current status and project goals, the following development phases 
 ### Phase 1: Foundational Enhancements & Core Features
 
 1. **Frontend Development:**
-     - Build a clean, modern UI using Next.js, React, and Tailwind CSS.
+     - **Completed:** Initial Next.js project setup (`/frontend`) with TypeScript, Tailwind CSS, ESLint.
+     - **Completed:** Integrated `shadcn/ui` library.
+     - **Completed:** Added initial UI components (Dashboard, Upload, Records, Settings etc.) from `v0.dev`.
+     - **Next Steps:** Connect UI elements (e.g., file upload) to backend APIs. Implement state management (Zustand). Display model selection and summarization results.
      - Implement file upload component.
      - Display model selection options fetched from the `/models/` endpoint.
      - Display summarization results.
