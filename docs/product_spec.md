@@ -157,7 +157,7 @@ Based on the current status and project goals, the following development phases 
 ## Architecture
 
 ```mermaid
-digraph LR
+graph LR
   Frontend[Next.js Frontend] --> BackendAPI[FastAPI Backend]
 
   subgraph Backend
