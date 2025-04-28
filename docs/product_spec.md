@@ -52,6 +52,21 @@ To handle diverse PDF document types effectively (digitally native text, scanned
     - `pdf2image`: For converting image-based PDFs to processable images.
         - Requires system dependency: `poppler`.
 
+## File Ingestion
+
+- **Supported Formats:** Plain text (.txt), PDF (.pdf), DICOM (.dcm), common image formats (JPEG, PNG), EHR directory structures (containing TSV/HTM initially, see TODO).
+- **Upload Mechanism:**
+  - Individual files (PDF, TXT, images, DICOM) are uploaded directly.
+  - **Directory Upload Strategy (Updated):** To handle potentially thousands of files within EHR directory structures (e.g., EHI export format), the frontend will now package the selected directory into a single ZIP archive using a client-side library (like JSZip). This single ZIP file will be uploaded to a dedicated backend endpoint.
+  - **Backend Processing:** The backend will receive the ZIP archive, extract its contents into a temporary directory, preserving the original structure. It will then iterate through the extracted files, routing them to appropriate processing pipelines based on their type and location within the structure (e.g., TSV/HTM to EHR parser, PDFs/images to respective processors).
+- **Processing Pipelines:**
+  - PDFs: Text extraction (possibly OCR via Tesseract if needed), then LLM summarization/analysis.
+  - Images/DICOM: Metadata extraction, potential OCR (Tesseract), potential image analysis models (future scope), LLM analysis based on extracted text/metadata.
+  - Text: Direct LLM analysis.
+  - EHR Directory (ZIP Upload): Extraction, then parsing of TSV/HTM files (see `ehr_parser.py`).
+    - **TODO:** Enhance EHR directory processing to handle other media types commonly found within the structure (e.g., PDFs in 'media' subfolders, scanned images). Route these files to their respective dedicated ingestion pipelines (PDF, image) instead of assuming all content is TSV/HTM.
+- **Status Tracking:** Upload and processing status (`INGESTED`, `NORMALIZED`, `SUMMARIZED`, `FAILED`) will be tracked per record.
+
 ## Current Status (as of 2025-04-27)
 
 - **Core Backend:** FastAPI application structure established.
@@ -65,6 +80,7 @@ To handle diverse PDF document types effectively (digitally native text, scanned
   - Utilizes parallel processing (`concurrent.futures`) for performance.
   - Outputs Markdown files to a configurable directory (defaults to adjacent directory).
   - **Integrated into backend via `/ingest/ehr` POST endpoint using BackgroundTasks.**
+  - **TODO:** Enhance EHR directory processing to handle other media types commonly found within the structure (e.g., PDFs in 'media' subfolders, scanned images). Route these files to their respective dedicated ingestion pipelines (PDF, image) instead of assuming all content is TSV/HTM.
 - **PDF Ingestion:**
   - Basic PDF upload endpoint (`/summarize-pdf/`) implemented.
   - Hybrid PDF processing strategy implemented (`pdf_utils.py`):

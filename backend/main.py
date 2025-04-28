@@ -32,6 +32,11 @@ from src.routes.ingestion_routes import router as ingestion_router
 # --- Fix import path for evidence_retriever --- #
 from src.services.evidence_retriever import search_pubmed # Corrected path
 
+# --- Increase Starlette form part limit --- #
+import starlette.formparsers
+starlette.formparsers.FormParser._max_parts = 10000 # Default is 1000
+starlette.formparsers.MultiPartParser._max_parts = 10000 # Default is 1000
+
 load_dotenv()
 
 # Configure logging

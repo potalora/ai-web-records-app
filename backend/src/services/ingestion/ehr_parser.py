@@ -18,6 +18,13 @@ import functools
 # Define logger at the global scope
 logger = logging.getLogger(__name__)
 
+# TODO: Enhance this parser/pipeline. When processing an extracted EHR ZIP archive,
+# this script (or the calling ingestion route) should identify non-TSV/HTM files
+# (e.g., PDFs in 'media/', images like JPG/PNG) based on path and extension.
+# These identified files should be routed to their respective dedicated ingestion
+# pipelines (e.g., PDF summarization, image processing) instead of being ignored
+# or causing errors here. The current focus is only on TSV/HTM conversion.
+
 def detect_encoding(file_path: Path, encodings_to_try: List[str]) -> Optional[str]:
     """Attempts to detect the encoding of a file by trying a list of common encodings."""
     for enc in encodings_to_try:
