@@ -181,6 +181,9 @@ Thumbs.db
 
 # --- Other --- #
 
+# Cascade Rules File
+.windsurfrules
+
 # Temp files
 *.tmp
 *.bak
