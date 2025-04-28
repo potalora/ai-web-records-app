@@ -1,3 +1,4 @@
+# --- Python --- #
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -84,10 +85,6 @@ ipython_config.py
 # pyenv
 .python-version
 
-# pipenv
-# According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-# Pipfile.lock
-
 # poetry
 # Poetry installs packages to virtualenvs/ by default. Add this to .gitignore if using pyenv or similar.
 # virtualenvs/
@@ -126,15 +123,81 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
-# OS Files
+# --- Node.js / Next.js --- #
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Dependency directories
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Next.js SSR cache directory
+.next/cache/
+
+# Next.js static export directory
+public/_next/
+
+# Optional ESLint cache
+.eslintcache
+
+# Optional TypeScript build info
+*.tsbuildinfo
+
+# Optional NextAuth.js database
+next-auth.sqlite
+
+# Environment variables
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- OS / IDE --- #
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# IDE files
+# IDE settings/metadata
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+*.sublime-project
 
-# Large Data Directories (adjust paths as needed)
-/Users/potalora/Downloads/Requested Record/EHITables/
-/Users/potalora/Downloads/Requested Record/EHITables_Markdown/
-# Add other large data/output directories if necessary
+# --- Other --- #
+
+# Temp files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Sensitive Files (Example - ensure .env is handled above)
+# secrets.yaml
+
+# Large Data/Output Directories (use relative paths inside project if needed)
+# data/
+# output/
+
+# Keep poetry.lock (recommended)
+poetry.lock
+
+# Keep package manager lock files (recommended)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
