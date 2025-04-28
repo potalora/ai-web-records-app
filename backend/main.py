@@ -8,10 +8,10 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel
 import time
 from google.api_core import exceptions as GoogleAPIErrors
-from backend.src.services.model_registry import (
+from src.services.model_registry import (
     get_available_pdf_models,
 )
-from backend.src.services.llm_service import (
+from src.services.llm_service import (
     summarize_pdf_auto,
 )
 
@@ -26,11 +26,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
-# Import the ingestion router from backend.src.routes.ingestion_routes with an alias
-from backend.src.routes.ingestion_routes import router as ingestion_router
+# Import the ingestion router from src.routes.ingestion_routes with an alias
+from src.routes.ingestion_routes import router as ingestion_router
 
 # --- Fix import path for evidence_retriever --- #
-from backend.src.services.evidence_retriever import search_pubmed # Corrected path
+from src.services.evidence_retriever import search_pubmed # Corrected path
 
 load_dotenv()
 
@@ -223,7 +223,7 @@ async def upload_file(file: UploadFile = File(...)):
     if file_extension in [".json", ".xml"]:
         # Handle FHIR JSON/XML
         # Create a temporary file to store the uploaded content
-        # because parse_fhir_resource expects a file path
+        # because parse_fHIR_resource expects a file path
         try:
             # Create a temporary directory
             with tempfile.TemporaryDirectory() as tmpdir:

@@ -2,8 +2,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, status, File, Upl
 from pathlib import Path
 import logging
 
-from backend.src.models.ingestion import EhrIngestionRequest
-from backend.src.services.ingestion.ehr_parser import run_ehr_parsing
+from ..models.ingestion import EhrIngestionRequest
+from ..services.ingestion.ehr_parser import run_ehr_parsing
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ def trigger_ehr_ingestion(request: EhrIngestionRequest, background_tasks: Backgr
 @router.post("/text", status_code=status.HTTP_200_OK)
 async def ingest_text_file(file: UploadFile = File(...)):
     """Accepts a plain text file upload and logs its reception."""
+    logger.info("--- Entered /ingest/text endpoint --- ")
     logger.info(f"Received request to ingest text file: {file.filename}")
 
     if not file.filename:
