@@ -1,13 +1,26 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status, File, UploadFile, Form, Depends
 from pathlib import Path
 import logging
 from typing import List
 import tempfile
 import shutil
 import os
+import uuid
+from datetime import datetime
 
 from ..models.ingestion import EhrIngestionRequest
+from ..models.file_ingestion import (
+    TextIngestionRequest, 
+    TextIngestionResponse, 
+    FileIngestionResponse,
+    RecordType,
+    ProcessingStatus
+)
 from ..services.ingestion.ehr_parser import run_ehr_parsing
+from ..services.auth.auth_service import get_current_user, User
+from ..services.database_service import get_database
+from ..services.security.encryption import encryption_service
+from ..services.security.audit import audit_service, AuditAction
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -47,10 +60,16 @@ def trigger_ehr_ingestion(request: EhrIngestionRequest, background_tasks: Backgr
     logger.info(f"EHR ingestion task added to background for: {request.input_dir}")
     return {"message": "EHR ingestion process started in the background."}
 
-@router.post("/text", status_code=status.HTTP_200_OK)
-async def ingest_text_file(file: UploadFile = File(...)):
-    """Accepts a plain text file upload and logs its reception."""
-    logger.info("--- Entered /ingest/text endpoint --- ")
+@router.post("/text", status_code=status.HTTP_200_OK, response_model=TextIngestionResponse)
+async def ingest_text_file(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    record_type: RecordType = Form(RecordType.OTHER),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """Accepts a plain text file upload and saves it to the database."""
+    logger.info(f"--- Entered /ingest/text endpoint for user {current_user.id} ---")
     logger.info(f"Received request to ingest text file: {file.filename}")
 
     if not file.filename:
@@ -67,17 +86,65 @@ async def ingest_text_file(file: UploadFile = File(...)):
             detail="Invalid file type. Only .txt files are accepted at this endpoint."
         )
 
+    db = get_database()
+    
     try:
-        # Read the file content
+        # Read and decode file content
         content_bytes = await file.read()
-        # Decode assuming UTF-8, adjust if other encodings are expected
-        content_text = content_bytes.decode('utf-8') 
+        content_text = content_bytes.decode('utf-8')
         
-        logger.info(f"Successfully read text file '{file.filename}'. Content starts with: '{content_text[:100]}...' (Length: {len(content_text)}) ")
+        logger.info(f"Successfully read text file '{file.filename}'. Content length: {len(content_text)}")
 
-        # TODO: Implement further processing (e.g., saving, sending to LLM, RAG indexing)
+        # Encrypt the content as bytes for consistency
+        encrypted_content = encryption_service.encrypt_bytes(content_text.encode('utf-8'), "health_record")
+        
+        # Create health record in database
+        health_record = await db.healthrecord.create({
+            "data": {
+                "userId": current_user.id,
+                "recordType": record_type.value,
+                "title": title.strip(),
+                "description": description.strip() if description else None,
+                "encryptedData": encrypted_content["ciphertext"],  # bytes
+                "encryptionIv": encrypted_content["iv"],
+                "encryptionSalt": encrypted_content["salt"],
+                "status": ProcessingStatus.COMPLETED.value,
+                "metadata": {
+                    "originalFilename": file.filename,
+                    "fileSize": len(content_bytes),
+                    "contentType": file.content_type or "text/plain"
+                }
+            }
+        })
+        
+        # Create document reference
+        document = await db.document.create({
+            "data": {
+                "healthRecordId": health_record.id,
+                "fileName": file.filename,
+                "fileType": file.content_type or "text/plain",
+                "fileSize": len(content_bytes),
+                "uploadedBy": current_user.id,
+                "storageUrl": f"encrypted:{health_record.id}",  # Indicates data is encrypted in health record
+            }
+        })
 
-        return {"message": "Text file received successfully.", "filename": file.filename, "size": len(content_text)}
+        # Log the activity for audit
+        await audit_service.log_activity(
+            user_id=current_user.id,
+            action=AuditAction.CREATE,
+            resource_type="HealthRecord",
+            resource_id=health_record.id,
+            details={"filename": file.filename, "record_type": record_type.value}
+        )
+
+        logger.info(f"Successfully created health record {health_record.id} and document {document.id}")
+        
+        return TextIngestionResponse(
+            health_record_id=health_record.id,
+            message=f"Text file '{file.filename}' ingested successfully",
+            content_length=len(content_text)
+        )
 
     except UnicodeDecodeError:
         logger.error(f"Failed to decode '{file.filename}' as UTF-8.")
@@ -92,83 +159,202 @@ async def ingest_text_file(file: UploadFile = File(...)):
             detail=f"An unexpected error occurred processing the text file."
         )
 
-@router.post("/files", status_code=status.HTTP_200_OK)
-async def ingest_files(files: List[UploadFile] = File(...), upload_type: str = Form("files")):
-    """Accepts file uploads, handling single files or directories based on upload_type."""
-    logger.info(f"--- Entered /ingest/files endpoint --- ")
-    logger.info(f"Attempting to process upload with type: {upload_type}")
+@router.post("/files", status_code=status.HTTP_200_OK, response_model=FileIngestionResponse)
+async def ingest_files(
+    files: List[UploadFile] = File(...), 
+    upload_type: str = Form("files"),
+    title: str = Form(None),
+    record_type: RecordType = Form(RecordType.OTHER),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """Accepts file uploads and saves them to the database with proper encryption."""
+    logger.info(f"--- Entered /ingest/files endpoint for user {current_user.id} ---")
+    logger.info(f"Processing {len(files)} files with upload_type: {upload_type}")
 
-    # Create a unique temporary directory for this batch
-    # Consider making the base path configurable (e.g., via env var)
-    base_temp_dir = Path(tempfile.gettempdir()) / "healthai_uploads"
-    base_temp_dir.mkdir(parents=True, exist_ok=True)
-    batch_temp_dir = Path(tempfile.mkdtemp(prefix=f"{upload_type}_", dir=base_temp_dir))
-    logger.info(f"Created temporary directory for batch: {batch_temp_dir}")
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files provided"
+        )
 
-    filenames = []
-    saved_paths = []
+    # Generate batch ID
+    batch_id = str(uuid.uuid4())
+    batch_title = title or f"File batch uploaded on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    
+    db = get_database()
+    health_record_ids = []
+    document_ids = []
+    processed_files = 0
 
     try:
         for file in files:
             logger.info(f"Processing file: {file.filename} (Content-Type: {file.content_type})")
-            original_filename = file.filename or "unknown_file"
-            target_path: Path
+            
+            if not file.filename:
+                logger.warning("Skipping file without filename")
+                continue
 
-            if upload_type == 'directory':
-                # Assume filename contains the relative path for directory uploads
-                # Sanitize the path to prevent directory traversal issues
-                # IMPORTANT: This assumes the browser provides relative paths in filename.
-                # Needs verification across browsers.
-                # A more robust way might involve sending metadata separately.
-                sanitized_relative_path = Path(*[part for part in Path(original_filename).parts if part not in (".", "..")])
-                target_path = batch_temp_dir / sanitized_relative_path
-                # Ensure parent directory exists
-                target_path.parent.mkdir(parents=True, exist_ok=True)
+            # Read file content
+            content_bytes = await file.read()
+            file_size = len(content_bytes)
+            
+            # Determine appropriate record type based on file extension if not specified
+            file_extension = Path(file.filename).suffix.lower()
+            determined_record_type = _determine_record_type(file_extension, file.content_type)
+            final_record_type = record_type if record_type != RecordType.OTHER else determined_record_type
 
-                # TODO: Add logic here to detect if the saved file is in a 'media' subdirectory
-                # and if it's a PDF. If so, trigger a different processing pipeline
-                # (e.g., the one designed for standalone PDF ingestion) instead of assuming
-                # it's part of the standard EHR structure (TSV/HTM).
+            # Create individual title for this file
+            file_title = f"{batch_title} - {file.filename}" if len(files) > 1 else (title or file.filename)
 
-            elif upload_type == 'files':
-                # Sanitize filename for direct saving
-                sanitized_filename = Path(original_filename).name # Get only the filename part
-                target_path = batch_temp_dir / sanitized_filename
+            # For text files, encrypt text content as bytes
+            if file_extension == '.txt' or (file.content_type and 'text/' in file.content_type):
+                try:
+                    content_text = content_bytes.decode('utf-8')
+                    # Use encrypt_bytes for consistency - all data stored as bytes
+                    encrypted_content = encryption_service.encrypt_bytes(content_text.encode('utf-8'), "health_record")
+                    
+                    # Store as encrypted bytes
+                    health_record = await db.healthrecord.create({
+                        "data": {
+                            "userId": current_user.id,
+                            "recordType": final_record_type.value,
+                            "title": file_title,
+                            "description": description,
+                            "encryptedData": encrypted_content["ciphertext"],  # bytes
+                            "encryptionIv": encrypted_content["iv"],
+                            "encryptionSalt": encrypted_content["salt"],
+                            "status": ProcessingStatus.COMPLETED.value,
+                            "metadata": {
+                                "originalFilename": file.filename,
+                                "fileSize": file_size,
+                                "contentType": file.content_type,
+                                "batchId": batch_id,
+                                "uploadType": upload_type
+                            }
+                        }
+                    })
+                    
+                except UnicodeDecodeError:
+                    # If text decoding fails, treat as binary
+                    encrypted_content = encryption_service.encrypt_bytes(content_bytes, "health_record")
+                    
+                    health_record = await db.healthrecord.create({
+                        "data": {
+                            "userId": current_user.id,
+                            "recordType": final_record_type.value,
+                            "title": file_title,
+                            "description": description,
+                            "encryptedData": encrypted_content["ciphertext"],  # bytes for binary data
+                            "encryptionIv": encrypted_content["iv"],
+                            "encryptionSalt": encrypted_content["salt"],
+                            "status": ProcessingStatus.COMPLETED.value,
+                            "metadata": {
+                                "originalFilename": file.filename,
+                                "fileSize": file_size,
+                                "contentType": file.content_type,
+                                "batchId": batch_id,
+                                "uploadType": upload_type
+                            }
+                        }
+                    })
             else:
-                # This case should ideally not be hit if default is 'files'
-                logger.warning(f"Received unexpected upload_type: {upload_type}, treating as 'files'.")
-                sanitized_filename = Path(original_filename).name
-                target_path = batch_temp_dir / sanitized_filename
-                # raise HTTPException(status_code=400, detail="Invalid upload type specified.") # Temporarily treat unexpected as 'files'
+                # For binary files (PDFs, images, etc.), encrypt as binary
+                encrypted_content = encryption_service.encrypt_bytes(content_bytes, "health_record")
+                
+                health_record = await db.healthrecord.create({
+                    "data": {
+                        "userId": current_user.id,
+                        "recordType": final_record_type.value,
+                        "title": file_title,
+                        "description": description,
+                        "encryptedData": encrypted_content["ciphertext"],  # bytes for binary data
+                        "encryptionIv": encrypted_content["iv"],
+                        "encryptionSalt": encrypted_content["salt"],
+                        "status": ProcessingStatus.COMPLETED.value,
+                        "metadata": {
+                            "originalFilename": file.filename,
+                            "fileSize": file_size,
+                            "contentType": file.content_type,
+                            "batchId": batch_id,
+                            "uploadType": upload_type
+                        }
+                    }
+                })
 
-            # Save the file
-            try:
-                with open(target_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                logger.info(f"Successfully saved {original_filename} to {target_path}")
-                filenames.append(original_filename)
-                saved_paths.append(str(target_path))
-            except Exception as e:
-                logger.error(f"Failed to save file {original_filename} to {target_path}: {e}")
-                # Decide if one failure should abort the whole batch
-                raise HTTPException(status_code=500, detail=f"Failed to save file {original_filename}.")
-            finally:
-                 # Ensure file handle is closed even if copyfileobj fails mid-way
-                 await file.close()
+            # Create document reference
+            document = await db.document.create({
+                "data": {
+                    "healthRecordId": health_record.id,
+                    "fileName": file.filename,
+                    "fileType": file.content_type or "application/octet-stream",
+                    "fileSize": file_size,
+                    "uploadedBy": current_user.id,
+                    "storageUrl": f"encrypted:{health_record.id}",
+                    "metadata": {
+                        "batchId": batch_id,
+                        "uploadType": upload_type
+                    }
+                }
+            })
 
-        logger.info(f"Successfully processed and saved {len(filenames)} files to {batch_temp_dir}")
-        # TODO: Trigger next steps (validation, parsing, etc.) using the batch_temp_dir
-        return {
-            "message": f"Successfully received and saved {len(filenames)} files.",
-            "upload_type": upload_type,
-            "filenames": filenames,
-            "temp_directory": str(batch_temp_dir) # Return temp dir path for potential further use
-        }
-    except HTTPException: # Re-raise HTTP exceptions
-        raise
+            # Log audit entry
+            await audit_service.log_activity(
+                user_id=current_user.id,
+                action=AuditAction.CREATE,
+                resource_type="HealthRecord",
+                resource_id=health_record.id,
+                details={
+                    "filename": file.filename,
+                    "record_type": final_record_type.value,
+                    "batch_id": batch_id,
+                    "file_size": file_size
+                }
+            )
+
+            health_record_ids.append(health_record.id)
+            document_ids.append(document.id)
+            processed_files += 1
+
+            logger.info(f"Successfully processed file {file.filename} -> record {health_record.id}")
+
+        logger.info(f"Successfully processed {processed_files} files in batch {batch_id}")
+        
+        return FileIngestionResponse(
+            batch_id=batch_id,
+            message=f"Successfully processed {processed_files} files",
+            files_processed=processed_files,
+            health_record_ids=health_record_ids,
+            document_ids=document_ids
+        )
+
     except Exception as e:
-        logger.error(f"An error occurred processing the batch in {batch_temp_dir}: {e}", exc_info=True)
-        # Clean up potentially partially created temp directory on general failure
-        # shutil.rmtree(batch_temp_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="An internal error occurred during file processing.")
-    # Note: Consider background tasks for longer processing steps after saving.
+        logger.error(f"Error processing file batch: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred processing the files: {str(e)}"
+        )
+
+
+def _determine_record_type(file_extension: str, content_type: str) -> RecordType:
+    """Determine record type based on file extension and content type."""
+    # Map file extensions to record types
+    extension_map = {
+        '.pdf': RecordType.OTHER,
+        '.txt': RecordType.CLINICAL_NOTE,
+        '.jpg': RecordType.RADIOLOGY,
+        '.jpeg': RecordType.RADIOLOGY,
+        '.png': RecordType.RADIOLOGY,
+        '.dcm': RecordType.RADIOLOGY,
+        '.xml': RecordType.OTHER,
+        '.json': RecordType.OTHER,
+    }
+    
+    # Check content type for additional hints
+    if content_type:
+        if 'image/' in content_type:
+            return RecordType.RADIOLOGY
+        elif 'text/' in content_type:
+            return RecordType.CLINICAL_NOTE
+    
+    return extension_map.get(file_extension, RecordType.OTHER)

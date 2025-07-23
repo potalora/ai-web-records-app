@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
@@ -106,6 +106,9 @@ app.include_router(ingestion_router)
 from src.routes.auth_routes import router as auth_router
 app.include_router(auth_router)
 
+# Import authentication dependency
+from src.services.auth.auth_service import get_current_user, User
+
 # Include dashboard routes
 app.include_router(dashboard_router)
 
@@ -197,12 +200,17 @@ async def list_models():
 
 @app.post("/summarize-pdf/")
 async def summarize_pdf(
-    provider: str = Form(...), model_id: str = Form(...), file: UploadFile = File(...)
+    provider: str = Form(...), 
+    model_id: str = Form(...), 
+    file: UploadFile = File(...),
+    title: str = Form(None),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_user)
 ):
-    """Receives a PDF file, provider, and model ID, and returns a summary."""
+    """Receives a PDF file, provider, and model ID, returns a summary and saves to database."""
     start_time = time.time()
     logger.info(
-        f"Received PDF summarization request for file: {file.filename}, provider: {provider}, model: {model_id}"
+        f"Received PDF summarization request for file: {file.filename}, provider: {provider}, model: {model_id}, user: {current_user.id}"
     )
 
     # Basic validation
@@ -226,16 +234,126 @@ async def summarize_pdf(
         )
 
     try:
+        # Read file content for database storage
+        await file.seek(0)  # Reset file pointer
+        content_bytes = await file.read()
+        file_size = len(content_bytes)
+        
+        # Reset file pointer for LLM processing
+        await file.seek(0)
+        
         # Call the refactored service function
         summary = await summarize_pdf_auto(
             provider=provider, model_id=model_id, pdf_file=file
         )
+        
+        # Save to database
+        from src.services.database_service import get_database
+        from src.services.security.encryption import encryption_service
+        from src.services.security.audit import audit_service, AuditAction
+        from src.models.file_ingestion import RecordType, ProcessingStatus
+        
+        db = get_database()
+        
+        # Encrypt PDF content
+        encrypted_pdf = encryption_service.encrypt_bytes(content_bytes, "health_record")
+        
+        # Create health record for the PDF
+        record_title = title or f"PDF Summary - {file.filename}"
+        health_record = await db.healthrecord.create({
+            "data": {
+                "userId": current_user.id,
+                "recordType": RecordType.OTHER.value,
+                "title": record_title,
+                "description": description,
+                "encryptedData": encrypted_pdf["ciphertext"],
+                "encryptionIv": encrypted_pdf["iv"],
+                "encryptionSalt": encrypted_pdf["salt"],
+                "status": ProcessingStatus.COMPLETED.value,
+                "metadata": {
+                    "originalFilename": file.filename,
+                    "fileSize": file_size,
+                    "contentType": "application/pdf",
+                    "processing": {
+                        "provider": provider,
+                        "model": model_id,
+                        "processingTime": time.time() - start_time
+                    }
+                }
+            }
+        })
+        
+        # Create document reference
+        document = await db.document.create({
+            "data": {
+                "healthRecordId": health_record.id,
+                "fileName": file.filename,
+                "fileType": "application/pdf",
+                "fileSize": file_size,
+                "uploadedBy": current_user.id,
+                "storageUrl": f"encrypted:{health_record.id}",
+            }
+        })
+        
+        # Encrypt and save summary
+        encrypted_summary = encryption_service.encrypt(summary, "summary")
+        summary_record = await db.summary.create({
+            "data": {
+                "healthRecordId": health_record.id,
+                "type": "PDF_SUMMARY",
+                "encryptedContent": encrypted_summary["ciphertext"],
+                "encryptionIv": encrypted_summary["iv"], 
+                "encryptionSalt": encrypted_summary["salt"],
+                "generatedBy": f"{provider}:{model_id}",
+                "metadata": {
+                    "provider": provider,
+                    "model": model_id,
+                    "processingTime": time.time() - start_time,
+                    "originalFilename": file.filename
+                }
+            }
+        })
+        
+        # Log audit entries
+        await audit_service.log_activity(
+            user_id=current_user.id,
+            action=AuditAction.CREATE,
+            resource_type="HealthRecord",
+            resource_id=health_record.id,
+            details={
+                "filename": file.filename,
+                "record_type": RecordType.OTHER.value,
+                "action": "pdf_upload_and_summarization"
+            }
+        )
+        
+        await audit_service.log_activity(
+            user_id=current_user.id,
+            action=AuditAction.CREATE,
+            resource_type="Summary",
+            resource_id=summary_record.id,
+            details={
+                "type": "PDF_SUMMARY",
+                "provider": provider,
+                "model": model_id,
+                "health_record_id": health_record.id
+            }
+        )
+        
         end_time = time.time()
         processing_time = end_time - start_time
+        
         logger.info(
-            f"Successfully summarized {file.filename} in {processing_time:.2f} seconds using {provider} model {model_id}."
+            f"Successfully summarized and saved {file.filename} in {processing_time:.2f} seconds using {provider} model {model_id}. Records: {health_record.id}, Summary: {summary_record.id}"
         )
-        return {"summary": summary}
+        
+        return {
+            "summary": summary,
+            "health_record_id": health_record.id,
+            "summary_id": summary_record.id,
+            "document_id": document.id,
+            "processing_time": processing_time
+        }
 
     except HTTPException as http_exc:
         # Re-raise HTTPExceptions raised from the service layer (e.g., conversion failure)
@@ -275,10 +393,15 @@ async def summarize_pdf(
 
 # --- New Upload Endpoint --- 
 @app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
-    """Handles file uploads, parsing FHIR JSON/XML and acknowledging PDFs."""
+async def upload_file(
+    file: UploadFile = File(...), 
+    title: str = Form(None),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """Handles file uploads, parsing FHIR JSON/XML and saving to database."""
     filename = file.filename
-    logger.info(f"Received upload request for file: {filename}")
+    logger.info(f"Received upload request for file: {filename} from user: {current_user.id}")
 
     if not filename:
         logger.warning("File upload request received without a filename.")
@@ -291,15 +414,17 @@ async def upload_file(file: UploadFile = File(...)):
 
     if file_extension in [".json", ".xml"]:
         # Handle FHIR JSON/XML
-        # Create a temporary file to store the uploaded content
-        # because parse_fHIR_resource expects a file path
         try:
-            # Create a temporary directory
+            # Read file content
+            content_bytes = await file.read()
+            file_size = len(content_bytes)
+            
+            # Create a temporary directory for FHIR parsing
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp_path = Path(tmpdir) / filename
                 # Save the uploaded file to the temporary path
                 with open(tmp_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
+                    buffer.write(content_bytes)
 
                 logger.info(f"Attempting to parse FHIR file: {tmp_path}")
                 # Parse the file using the utility function
@@ -311,10 +436,74 @@ async def upload_file(file: UploadFile = File(...)):
                 logger.info(
                     f"Successfully parsed FHIR resource: Type='{resource_type}', ID='{resource_id}' from {filename}"
                 )
+                
+                # Save to database
+                from src.services.database_service import get_database
+                from src.services.security.encryption import encryption_service
+                from src.services.security.audit import audit_service, AuditAction
+                from src.models.file_ingestion import RecordType, ProcessingStatus
+                
+                db = get_database()
+                
+                # Encrypt file content
+                encrypted_content = encryption_service.encrypt_bytes(content_bytes, "health_record")
+                
+                # Create health record
+                record_title = title or f"FHIR {resource_type} - {filename}"
+                health_record = await db.healthrecord.create({
+                    "data": {
+                        "userId": current_user.id,
+                        "recordType": RecordType.OTHER.value,
+                        "title": record_title,
+                        "description": description,
+                        "encryptedData": encrypted_content["ciphertext"],
+                        "encryptionIv": encrypted_content["iv"],
+                        "encryptionSalt": encrypted_content["salt"],
+                        "status": ProcessingStatus.COMPLETED.value,
+                        "metadata": {
+                            "originalFilename": filename,
+                            "fileSize": file_size,
+                            "contentType": file.content_type or f"application/{file_extension[1:]}",
+                            "fhir": {
+                                "resourceType": resource_type,
+                                "resourceId": resource_id
+                            }
+                        }
+                    }
+                })
+                
+                # Create document reference
+                document = await db.document.create({
+                    "data": {
+                        "healthRecordId": health_record.id,
+                        "fileName": filename,
+                        "fileType": file.content_type or f"application/{file_extension[1:]}",
+                        "fileSize": file_size,
+                        "uploadedBy": current_user.id,
+                        "storageUrl": f"encrypted:{health_record.id}",
+                    }
+                })
+                
+                # Log audit entry
+                await audit_service.log_activity(
+                    user_id=current_user.id,
+                    action=AuditAction.CREATE,
+                    resource_type="HealthRecord",
+                    resource_id=health_record.id,
+                    details={
+                        "filename": filename,
+                        "record_type": RecordType.OTHER.value,
+                        "fhir_resource_type": resource_type,
+                        "fhir_resource_id": resource_id
+                    }
+                )
+                
                 return {
-                    "message": f"Successfully parsed FHIR {file_extension.upper()[1:]} file.",
+                    "message": f"Successfully parsed and saved FHIR {file_extension.upper()[1:]} file.",
                     "resource_type": resource_type,
                     "resource_id": resource_id,
+                    "health_record_id": health_record.id,
+                    "document_id": document.id,
                     "data": fhir_resource.model_dump() if hasattr(fhir_resource, 'model_dump') else str(fhir_resource)
                 }
 
@@ -330,22 +519,83 @@ async def upload_file(file: UploadFile = File(...)):
                 exc_info=True
             )
             raise HTTPException(status_code=500, detail="An unexpected server error occurred.")
-        finally:
-            # Ensure the file object is closed
-            # (shutil.copyfileobj should handle this, but belt-and-suspenders)
-            file.file.close()
 
     elif file_extension == ".pdf":
-        # Handle PDF (Placeholder - just acknowledge for now)
-        # Actual PDF ingestion/processing logic would go here or be called from here
-        logger.info(f"Received PDF file: {filename}. Ingestion logic pending.")
-        file.file.close() # Close the file
-        return {"message": f"PDF file '{filename}' received. Processing TBD."}
+        # Handle PDF - redirect to /ingest/files endpoint logic
+        try:
+            content_bytes = await file.read()
+            file_size = len(content_bytes)
+            
+            # Save to database like other files
+            from src.services.database_service import get_database
+            from src.services.security.encryption import encryption_service
+            from src.services.security.audit import audit_service, AuditAction
+            from src.models.file_ingestion import RecordType, ProcessingStatus
+            
+            db = get_database()
+            
+            # Encrypt PDF content
+            encrypted_content = encryption_service.encrypt_bytes(content_bytes, "health_record")
+            
+            # Create health record
+            record_title = title or f"PDF Document - {filename}"
+            health_record = await db.healthrecord.create({
+                "data": {
+                    "userId": current_user.id,
+                    "recordType": RecordType.OTHER.value,
+                    "title": record_title,
+                    "description": description,
+                    "encryptedData": encrypted_content["ciphertext"],
+                    "encryptionIv": encrypted_content["iv"],
+                    "encryptionSalt": encrypted_content["salt"],
+                    "status": ProcessingStatus.COMPLETED.value,
+                    "metadata": {
+                        "originalFilename": filename,
+                        "fileSize": file_size,
+                        "contentType": "application/pdf"
+                    }
+                }
+            })
+            
+            # Create document reference
+            document = await db.document.create({
+                "data": {
+                    "healthRecordId": health_record.id,
+                    "fileName": filename,
+                    "fileType": "application/pdf",
+                    "fileSize": file_size,
+                    "uploadedBy": current_user.id,
+                    "storageUrl": f"encrypted:{health_record.id}",
+                }
+            })
+            
+            # Log audit entry
+            await audit_service.log_activity(
+                user_id=current_user.id,
+                action=AuditAction.CREATE,
+                resource_type="HealthRecord",
+                resource_id=health_record.id,
+                details={
+                    "filename": filename,
+                    "record_type": RecordType.OTHER.value,
+                    "action": "pdf_upload"
+                }
+            )
+            
+            logger.info(f"Successfully saved PDF file: {filename} to database as record {health_record.id}")
+            return {
+                "message": f"PDF file '{filename}' uploaded and saved successfully.",
+                "health_record_id": health_record.id,
+                "document_id": document.id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing PDF upload for {filename}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="An error occurred processing the PDF file.")
 
     else:
         # Unsupported file type
         logger.warning(f"Unsupported file type uploaded: {filename}")
-        file.file.close() # Close the file
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type: '{file_extension}'. Only PDF, JSON, and XML are currently supported."
