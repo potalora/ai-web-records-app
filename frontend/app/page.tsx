@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation"
 
 export default function Home() {
-  // Redirect to dashboard immediately
-  redirect("/dashboard")
+  // Redirect to overview (main landing page)
+  redirect("/overview")
 }

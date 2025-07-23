@@ -3,7 +3,7 @@
 import type React from "react"
 
 import Link from "next/link"
-import { FileText, Search, BookOpen, Settings, Home } from "lucide-react"
+import { FileText, BookOpen, Settings, Home, TestTube } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useMobile } from "@/hooks/use-mobile"
 
@@ -14,9 +14,9 @@ export function DashboardNav() {
     return (
       <div className="fixed bottom-0 left-0 z-10 w-full border-t bg-background">
         <div className="flex h-16 items-center justify-around">
-          <NavItem href="/dashboard" icon={<Home className="h-5 w-5" />} label="Home" />
-          <NavItem href="/dashboard/records" icon={<FileText className="h-5 w-5" />} label="Records" />
-          <NavItem href="/dashboard/evidence" icon={<Search className="h-5 w-5" />} label="Evidence" />
+          <NavItem href="/overview" icon={<Home className="h-5 w-5" />} label="Overview" />
+          <NavItem href="/records" icon={<FileText className="h-5 w-5" />} label="Records" />
+          <NavItem href="/summaries" icon={<BookOpen className="h-5 w-5" />} label="Summaries" />
         </div>
       </div>
     )
@@ -26,19 +26,19 @@ export function DashboardNav() {
     <div className="w-64 border-r bg-background">
       <div className="flex h-full flex-col py-4">
         <div className="px-4 py-2">
-          <h2 className="text-lg font-semibold">Health Records</h2>
+          <h2 className="text-lg font-semibold">HealthAI</h2>
         </div>
         <div className="flex-1 px-2">
           <nav className="flex flex-col gap-1">
-            <NavItem href="/dashboard" icon={<Home className="h-5 w-5" />} label="Overview" />
-            <NavItem href="/dashboard/records" icon={<FileText className="h-5 w-5" />} label="Medical Records" />
-            <NavItem href="/dashboard/evidence" icon={<Search className="h-5 w-5" />} label="Evidence Search" />
-            <NavItem href="/dashboard/summaries" icon={<BookOpen className="h-5 w-5" />} label="Summaries" />
+            <NavItem href="/overview" icon={<Home className="h-5 w-5" />} label="Overview" />
+            <NavItem href="/records" icon={<FileText className="h-5 w-5" />} label="Medical Records" />
+            <NavItem href="/records/labs" icon={<TestTube className="h-5 w-5" />} label="Lab Results" />
+            <NavItem href="/summaries" icon={<BookOpen className="h-5 w-5" />} label="Summaries" />
           </nav>
         </div>
         <div className="border-t px-2 pt-4">
           <nav className="flex flex-col gap-1">
-            <NavItem href="/dashboard/settings" icon={<Settings className="h-5 w-5" />} label="Settings" />
+            <NavItem href="/settings" icon={<Settings className="h-5 w-5" />} label="Settings" />
           </nav>
         </div>
       </div>
