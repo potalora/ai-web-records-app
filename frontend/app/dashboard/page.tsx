@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -7,15 +10,31 @@ import { DashboardNav } from "@/components/dashboard-nav"
 import { UploadCard } from "@/components/upload-card"
 import { RecentUploads } from "@/components/recent-uploads"
 import { HealthSummary } from "@/components/health-summary"
+import { MedicalRecordsTable } from "@/components/medical-records-table"
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import apiClient, { DashboardStats } from "@/lib/api-client"
+import { useApi } from "@/hooks/use-api"
 import Link from "next/link"
 
 export default function DashboardPage() {
+  const {
+    data: dashboardStats,
+    loading: statsLoading,
+    execute: fetchStats,
+    error: statsError
+  } = useApi(apiClient.getDashboardStats);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
+
   return (
-    <div className="flex min-h-screen flex-col">
-      <DashboardHeader />
-      <div className="flex flex-1">
-        <DashboardNav />
-        <main className="flex-1 p-6">
+    <ProtectedRoute>
+      <div className="flex min-h-screen flex-col">
+        <DashboardHeader />
+        <div className="flex flex-1">
+          <DashboardNav />
+          <main className="flex-1 p-6">
           <div className="flex flex-col gap-6">
             <div className="flex items-center justify-between">
               <h1 className="text-3xl font-bold">Dashboard</h1>
@@ -42,8 +61,12 @@ export default function DashboardPage() {
                       <FileText className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">8</div>
-                      <p className="text-xs text-muted-foreground">+2 from last week</p>
+                      <div className="text-2xl font-bold">
+                        {statsLoading ? "..." : dashboardStats?.totalRecords || 0}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        +{dashboardStats?.recentRecordsChange || 0} from last week
+                      </p>
                     </CardContent>
                   </Card>
                   <Card>
@@ -52,8 +75,12 @@ export default function DashboardPage() {
                       <Search className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">12</div>
-                      <p className="text-xs text-muted-foreground">+5 from last week</p>
+                      <div className="text-2xl font-bold">
+                        {statsLoading ? "..." : dashboardStats?.evidenceSearches || 0}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        +{dashboardStats?.recentEvidenceChange || 0} from last week
+                      </p>
                     </CardContent>
                   </Card>
                   <Card>
@@ -62,8 +89,12 @@ export default function DashboardPage() {
                       <BookOpen className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">5</div>
-                      <p className="text-xs text-muted-foreground">+3 from last week</p>
+                      <div className="text-2xl font-bold">
+                        {statsLoading ? "..." : dashboardStats?.summariesGenerated || 0}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        +{dashboardStats?.recentSummariesChange || 0} from last week
+                      </p>
                     </CardContent>
                   </Card>
                 </div>
@@ -117,51 +148,7 @@ export default function DashboardPage() {
                     </Link>
                   </CardHeader>
                   <CardContent>
-                    <div className="rounded-md border">
-                      <div className="grid grid-cols-4 p-4 font-medium">
-                        <div>Name</div>
-                        <div>Type</div>
-                        <div>Date</div>
-                        <div>Status</div>
-                      </div>
-                      <div className="divide-y">
-                        <RecordRow
-                          name="Complete Blood Count"
-                          type="Lab Results (PDF)"
-                          date="Apr 15, 2023"
-                          status="Analyzed"
-                          href="/dashboard/records/1"
-                        />
-                        <RecordRow
-                          name="Chest X-Ray Report"
-                          type="Radiology (PDF)"
-                          date="Mar 22, 2023"
-                          status="Analyzed"
-                          href="/dashboard/records/2"
-                        />
-                        <RecordRow
-                          name="Annual Physical Exam"
-                          type="Clinical Notes (PDF)"
-                          date="Feb 10, 2023"
-                          status="Analyzed"
-                          href="/dashboard/records/3"
-                        />
-                        <RecordRow
-                          name="Lipid Panel"
-                          type="Lab Results (EHR)"
-                          date="Feb 10, 2023"
-                          status="Analyzed"
-                          href="/dashboard/records/4"
-                        />
-                        <RecordRow
-                          name="Allergy Test Results"
-                          type="Lab Results (PDF)"
-                          date="Jan 5, 2023"
-                          status="Analyzed"
-                          href="/dashboard/records/5"
-                        />
-                      </div>
-                    </div>
+                    <MedicalRecordsTable />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -230,36 +217,10 @@ export default function DashboardPage() {
               </TabsContent>
             </Tabs>
           </div>
-        </main>
+          </main>
+        </div>
       </div>
-    </div>
-  )
-}
-
-function RecordRow({
-  name,
-  type,
-  date,
-  status,
-  href,
-}: {
-  name: string
-  type: string
-  date: string
-  status: string
-  href: string
-}) {
-  return (
-    <Link href={href} className="grid grid-cols-4 p-4 hover:bg-slate-50">
-      <div className="font-medium">{name}</div>
-      <div className="text-muted-foreground">{type}</div>
-      <div className="text-muted-foreground">{date}</div>
-      <div>
-        <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
-          {status}
-        </span>
-      </div>
-    </Link>
+    </ProtectedRoute>
   )
 }
 

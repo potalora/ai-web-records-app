@@ -3,16 +3,26 @@
 import type React from "react"
 
 import { useState, useRef } from "react"
-import { FileUp, File, X, FolderUp } from "lucide-react"
+import { FileUp, File, X, FolderUp, AlertCircle, CheckCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import apiClient from "@/lib/api-client"
+import { useFileUpload } from "@/hooks/use-api"
 
 export function UploadCard() {
   const [files, setFiles] = useState<File[]>([])
-  const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [error, setError] = useState<string | null>(null)
   const [uploadType, setUploadType] = useState<'files' | 'directory'>('files')
+  const [success, setSuccess] = useState<string | null>(null)
+
+  const {
+    upload,
+    uploading,
+    progress,
+    error,
+    result,
+    reset
+  } = useFileUpload(apiClient.ingestFiles)
 
   const MAX_FILES = 10000; // Increased limit significantly, was 1000
 
@@ -24,12 +34,14 @@ export function UploadCard() {
       const newFiles = Array.from(e.target.files)
       // Check file count before setting state
       if (newFiles.length > MAX_FILES) {
-        setError(`Too many files. Maximum number of files is ${MAX_FILES}.`);
+        console.error(`Too many files. Maximum number of files is ${MAX_FILES}.`);
         setFiles([]); // Clear selection
         setUploadType('files'); // Reset type
         return;
       }
-      setError(null); // Clear previous errors
+      
+      reset(); // Clear previous errors and results
+      setSuccess(null);
       setFiles(newFiles)
       setUploadType((newFiles[0] as any).webkitRelativePath ? 'directory' : 'files')
     }
@@ -45,53 +57,27 @@ export function UploadCard() {
   }
 
   const handleUpload = async () => {
-    // Double-check count before sending (though handleFileChange should prevent this state)
-    if (files.length > MAX_FILES) {
-        setError(`Too many files selected. Maximum is ${MAX_FILES}. Please reduce selection.`);
-        return;
-    }
     if (files.length === 0) {
-      setError("Please select files to upload.")
-      return
+      return;
     }
 
-    setError(null) // Clear errors before upload
-
-    const formData = new FormData()
-    files.forEach((file) => {
-      formData.append("files", file, file.name)
-      if (uploadType === 'directory' && (file as any).webkitRelativePath) {
-         // NOTE: Sending relative paths might require backend adjustments
-         // depending on how FastAPI/Starlette handle file uploads.
-         // A common pattern is to send metadata alongside the file.
-         // For simplicity now, we rely on backend potentially inferring or we adjust later.
-      }
-    })
-    formData.append('upload_type', uploadType)
-
-    setUploading(true)
-    setProgress(0)
+    if (files.length > MAX_FILES) {
+      console.error(`Too many files selected. Maximum is ${MAX_FILES}. Please reduce selection.`);
+      return;
+    }
 
     try {
-      const response = await fetch("http://localhost:8000/ingest/files", {
-        method: "POST",
-        body: formData,
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
-      }
-
-      const result = await response.json()
-      console.log("Upload successful:", result)
-      setFiles([])
-    } catch (err: any) {
-      console.error("Upload failed:", err)
-      setError(err.message || "An unknown error occurred during upload.")
-    } finally {
-      setUploading(false)
-      setProgress(0)
+      const uploadResult = await upload(files);
+      setSuccess(`Successfully uploaded ${files.length} files. Batch ID: ${uploadResult.batch_id}`);
+      setFiles([]);
+      
+      // Reset file inputs
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (dirInputRef.current) dirInputRef.current.value = '';
+      
+    } catch (error) {
+      console.error("Upload failed:", error);
+      // Error is already handled by useFileUpload hook
     }
   }
 
@@ -101,6 +87,22 @@ export function UploadCard() {
 
   return (
     <div className="space-y-4">
+      {/* Success Message */}
+      {success && (
+        <Alert>
+          <CheckCircle className="h-4 w-4" />
+          <AlertDescription>{success}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error.detail || 'Upload failed'}</AlertDescription>
+        </Alert>
+      )}
+
       <div
         className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-slate-50 transition-colors"
         onClick={() => triggerFileInput('files')}
@@ -139,17 +141,15 @@ export function UploadCard() {
             </div>
           ))}
 
-          {error && error.startsWith("Too many files") && (
-            <p className="text-sm text-red-600">{error}</p>
-          )}
-
           {uploading ? (
             <div className="space-y-2">
               <Progress value={progress} />
-              <p className="text-xs text-center text-muted-foreground">Uploading...</p>
+              <p className="text-xs text-center text-muted-foreground">
+                Uploading {files.length} files... {progress}%
+              </p>
             </div>
           ) : (
-            <Button onClick={handleUpload} className="w-full" disabled={uploading}> 
+            <Button onClick={handleUpload} className="w-full" disabled={uploading || files.length === 0}> 
               Upload {files.length} {files.length === 1 ? "Item" : "Items"} ({uploadType})
             </Button>
           )}

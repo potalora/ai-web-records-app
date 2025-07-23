@@ -1,0 +1,361 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider             = "prisma-client-py"
+  recursive_type_depth = 5
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication and authorization
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  emailVerified    DateTime?
+  password         String // Encrypted with bcrypt
+  role             UserRole  @default(PATIENT)
+  mfaEnabled       Boolean   @default(false)
+  mfaSecret        String? // Encrypted
+  lastLogin        DateTime?
+  failedLoginCount Int       @default(0)
+  accountLocked    Boolean   @default(false)
+  accountLockedAt  DateTime?
+
+  // HIPAA Requirements
+  termsAcceptedAt   DateTime?
+  privacyAcceptedAt DateTime?
+
+  // Relationships
+  profile      UserProfile?
+  auditLogs    AuditLog[]
+  healthRecords HealthRecord[]
+  accessLogs   AccessLog[]
+  sessions     UserSession[]
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  @@index([email])
+  @@index([deletedAt])
+}
+
+enum UserRole {
+  PATIENT
+  PROVIDER
+  ADMIN
+  SYSTEM
+}
+
+// User Profile for PII separation
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Encrypted PII fields
+  firstName   String // Encrypted
+  lastName    String // Encrypted
+  dateOfBirth String // Encrypted
+  ssn         String? // Encrypted + masked
+  phone       String? // Encrypted
+
+  // Address (consider separate table for normalization)
+  addressLine1 String? // Encrypted
+  addressLine2 String? // Encrypted
+  city         String? // Encrypted
+  state        String?
+  zipCode      String? // Encrypted
+  country      String?
+
+  // Emergency Contact
+  emergencyName  String? // Encrypted
+  emergencyPhone String? // Encrypted
+  emergencyRel   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Health Records
+model HealthRecord {
+  id           String  @id @default(cuid())
+  userId       String
+  user         User    @relation(fields: [userId], references: [id])
+  
+  recordType   RecordType
+  sourceSystem String?
+  externalId   String? // ID from source system
+
+  // Metadata
+  recordDate  DateTime
+  title       String
+  description String?
+
+  // Encrypted content
+  encryptedData Bytes // Full record data encrypted
+  encryptionIv  String // Initialization vector
+  encryptionAlg String @default("AES-256-GCM")
+
+  // Processing status
+  status          ProcessingStatus @default(PENDING)
+  processingError String?
+
+  // Relationships
+  documents     Document[]
+  fhirResources FhirResource[]
+  summaries     Summary[]
+  accessLogs    AccessLog[]
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  @@index([userId, recordDate])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+enum RecordType {
+  LAB_RESULT
+  IMAGING
+  CLINICAL_NOTE
+  PRESCRIPTION
+  IMMUNIZATION
+  PROCEDURE
+  DIAGNOSIS
+  VITAL_SIGNS
+  OTHER
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  ARCHIVED
+}
+
+// Documents (File Storage Reference)
+model Document {
+  id             String       @id @default(cuid())
+  healthRecordId String
+  healthRecord   HealthRecord @relation(fields: [healthRecordId], references: [id])
+
+  fileName       String
+  fileType       String
+  mimeType       String
+  fileSize       Int
+
+  // Storage location (encrypted path)
+  storageUrl     String // Encrypted S3/local path
+  checksumSha256 String // File integrity
+
+  // Encryption details
+  encrypted     Boolean @default(true)
+  encryptionKey String? // Encrypted key reference
+
+  // Processing
+  status        ProcessingStatus @default(PENDING)
+  extractedText String? // Encrypted
+
+  // Metadata
+  uploadedBy  String
+  uploadedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  @@index([healthRecordId])
+  @@index([status])
+}
+
+// FHIR Resources
+model FhirResource {
+  id             String        @id @default(cuid())
+  healthRecordId String?
+  healthRecord   HealthRecord? @relation(fields: [healthRecordId], references: [id])
+
+  resourceType String // Bundle, Patient, Observation, etc.
+  fhirId       String // FHIR resource ID
+  fhirVersion  String @default("4.0.1")
+
+  // Encrypted FHIR JSON
+  resourceData Bytes // Encrypted JSON
+  encryptionIv String
+
+  // Indexable fields for search (not encrypted)
+  patientRef   String?
+  encounterRef String?
+  dateRecorded DateTime?
+
+  // Metadata
+  sourceSystem String?
+  importedAt   DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([resourceType, fhirId])
+  @@index([patientRef])
+  @@index([dateRecorded])
+}
+
+// AI Summaries
+model Summary {
+  id             String       @id @default(cuid())
+  healthRecordId String
+  healthRecord   HealthRecord @relation(fields: [healthRecordId], references: [id])
+
+  summaryType SummaryType
+  llmProvider String // openai, google, anthropic
+  llmModel    String // gpt-4, gemini-pro, claude-3
+
+  // Encrypted content
+  summaryText  Bytes // Encrypted
+  encryptionIv String
+
+  // Metadata
+  confidence     Float?
+  processingTime Int? // milliseconds
+  tokenCount     Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([healthRecordId])
+  @@index([summaryType])
+}
+
+enum SummaryType {
+  GENERAL
+  DIAGNOSTIC
+  TREATMENT
+  MEDICATION
+  LAB_INTERPRETATION
+}
+
+// Audit Logs (HIPAA Required)
+model AuditLog {
+  id           String      @id @default(cuid())
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id])
+  
+  action       AuditAction
+  resourceType String
+  resourceId   String
+
+  // Request details
+  ipAddress     String
+  userAgent     String?
+  requestMethod String?
+  requestPath   String?
+
+  // Change tracking
+  oldValues Json? // Encrypted
+  newValues Json? // Encrypted
+
+  // Result
+  success      Boolean
+  errorMessage String?
+
+  timestamp DateTime @default(now())
+
+  @@index([userId, timestamp])
+  @@index([resourceType, resourceId])
+  @@index([timestamp])
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  PRINT
+  SHARE
+  DENY_ACCESS
+}
+
+// Access Logs (Track all PHI access)
+model AccessLog {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  
+  healthRecordId String
+  healthRecord   HealthRecord @relation(fields: [healthRecordId], references: [id])
+
+  accessType AccessType
+  purpose    String // Reason for access
+
+  // Context
+  ipAddress String
+  sessionId String?
+
+  accessedAt DateTime @default(now())
+
+  @@index([userId, accessedAt])
+  @@index([healthRecordId, accessedAt])
+}
+
+enum AccessType {
+  VIEW
+  DOWNLOAD
+  PRINT
+  SHARE
+  API_ACCESS
+}
+
+// User Sessions
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  
+  sessionToken String   @unique
+  ipAddress    String
+  userAgent    String
+
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  lastActivity DateTime @default(now())
+
+  @@index([sessionToken])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Encryption Keys (Key Rotation)
+model EncryptionKey {
+  id        String   @id @default(cuid())
+  keyName   String   @unique
+  keyVersion Int
+
+  // Encrypted with master key
+  encryptedKey String
+  algorithm    String @default("AES-256-GCM")
+
+  // Usage tracking
+  purpose String // user_data, health_records, etc.
+
+  activeFrom DateTime  @default(now())
+  activeTo   DateTime?
+
+  createdAt DateTime  @default(now())
+  rotatedAt DateTime?
+
+  @@index([keyName, keyVersion])
+  @@index([activeFrom, activeTo])
+}

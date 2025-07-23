@@ -5,7 +5,7 @@ from fhir.resources.bundle import Bundle
 from fhir.resources.patient import Patient
 from fhir.resources.observation import Observation
 
-from backend.utils.ehr_parser import parse_fhir_resource, FHIRParsingError
+from src.services.ingestion.ehr_parser import parse_fhir_resource, FHIRParsingError
 
 # Define the fixtures directory relative to the test file
 FIXTURES_DIR = Path(__file__).parent.parent / 'fixtures'

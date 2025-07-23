@@ -1,0 +1,235 @@
+"""
+Dashboard API Routes
+
+Provides endpoints for dashboard data including user statistics,
+recent uploads, health summaries, and medical records overview.
+"""
+
+from datetime import datetime, timedelta
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from ..services.auth.auth_service import get_current_user, User
+from ..services.database_service import get_database
+
+router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+# Response models
+class DashboardStats(BaseModel):
+    totalRecords: int
+    evidenceSearches: int
+    summariesGenerated: int
+    recentRecordsChange: int
+    recentEvidenceChange: int
+    recentSummariesChange: int
+
+class RecentUpload(BaseModel):
+    id: str
+    filename: str
+    fileType: str
+    uploadedAt: str
+    status: str
+    recordType: str
+
+class HealthSummaryData(BaseModel):
+    id: str
+    title: str
+    content: str
+    createdAt: str
+    provider: str
+    model: str
+    recordsAnalyzed: int
+
+class MedicalRecord(BaseModel):
+    id: str
+    title: str
+    recordType: str
+    createdAt: str
+    status: str
+    fileCount: int
+    summaryAvailable: bool
+
+@router.get("/stats", response_model=DashboardStats)
+async def get_dashboard_stats(
+    current_user: User = Depends(get_current_user)
+):
+    """Get dashboard statistics for the current user"""
+    try:
+        db = get_database()
+        
+        # Get current date ranges for comparison
+        now = datetime.utcnow()
+        week_ago = now - timedelta(days=7)
+        
+        # Count total records for this user
+        total_records = await db.healthrecord.count(
+            where={"userId": current_user.id, "deletedAt": None}
+        )
+        
+        # Count records from last week for comparison
+        recent_records = await db.healthrecord.count(
+            where={
+                "userId": current_user.id,
+                "createdAt": {"gte": week_ago},
+                "deletedAt": None
+            }
+        )
+        
+        # Count summaries generated
+        summaries_generated = await db.summary.count(
+            where={"userId": current_user.id, "deletedAt": None}
+        )
+        
+        # Count recent summaries
+        recent_summaries = await db.summary.count(
+            where={
+                "userId": current_user.id,
+                "createdAt": {"gte": week_ago},
+                "deletedAt": None
+            }
+        )
+        
+        # Count evidence searches (from audit logs)
+        evidence_searches = await db.auditlog.count(
+            where={
+                "userId": current_user.id,
+                "action": "EVIDENCE_SEARCH",
+                "createdAt": {"gte": now - timedelta(days=30)}
+            }
+        )
+        
+        recent_evidence_searches = await db.auditlog.count(
+            where={
+                "userId": current_user.id,
+                "action": "EVIDENCE_SEARCH",
+                "createdAt": {"gte": week_ago}
+            }
+        )
+        
+        return DashboardStats(
+            totalRecords=total_records,
+            evidenceSearches=evidence_searches,
+            summariesGenerated=summaries_generated,
+            recentRecordsChange=recent_records,
+            recentEvidenceChange=recent_evidence_searches,
+            recentSummariesChange=recent_summaries
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
+
+@router.get("/recent-uploads", response_model=List[RecentUpload])
+async def get_recent_uploads(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user)
+):
+    """Get recent uploads for the current user"""
+    try:
+        db = get_database()
+        
+        # Get recent health records with document info
+        records = await db.healthrecord.find_many(
+            where={"userId": current_user.id, "deletedAt": None},
+            include={"documents": True},
+            order_by={"createdAt": "desc"},
+            take=limit
+        )
+        
+        uploads = []
+        for record in records:
+            # Get the first document for filename
+            first_doc = record.documents[0] if record.documents else None
+            filename = first_doc.filename if first_doc else record.title
+            file_type = first_doc.mimeType if first_doc else "unknown"
+            
+            uploads.append(RecentUpload(
+                id=record.id,
+                filename=filename,
+                fileType=file_type,
+                uploadedAt=record.createdAt.isoformat(),
+                status=record.status,
+                recordType=record.recordType
+            ))
+        
+        return uploads
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch recent uploads: {str(e)}")
+
+@router.get("/health-summary", response_model=Optional[HealthSummaryData])
+async def get_health_summary(
+    current_user: User = Depends(get_current_user)
+):
+    """Get the latest health summary for the current user"""
+    try:
+        db = get_database()
+        
+        # Get the most recent summary
+        summary = await db.summary.find_first(
+            where={"userId": current_user.id, "deletedAt": None},
+            order_by={"createdAt": "desc"}
+        )
+        
+        if not summary:
+            return None
+        
+        # Count records analyzed for this summary
+        records_count = await db.healthrecord.count(
+            where={
+                "userId": current_user.id,
+                "createdAt": {"lte": summary.createdAt},
+                "deletedAt": None
+            }
+        )
+        
+        return HealthSummaryData(
+            id=summary.id,
+            title=f"Health Summary - {summary.createdAt.strftime('%B %d, %Y')}",
+            content=summary.content,
+            createdAt=summary.createdAt.isoformat(),
+            provider=summary.provider or "OpenAI",
+            model=summary.model or "gpt-4",
+            recordsAnalyzed=records_count
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch health summary: {str(e)}")
+
+@router.get("/medical-records", response_model=List[MedicalRecord])
+async def get_medical_records(
+    limit: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get medical records for the current user"""
+    try:
+        db = get_database()
+        
+        # Build query parameters
+        query_params = {
+            "where": {"userId": current_user.id, "deletedAt": None},
+            "include": {"documents": True, "summaries": True},
+            "order_by": {"createdAt": "desc"}
+        }
+        
+        if limit:
+            query_params["take"] = limit
+        
+        records = await db.healthrecord.find_many(**query_params)
+        
+        medical_records = []
+        for record in records:
+            medical_records.append(MedicalRecord(
+                id=record.id,
+                title=record.title,
+                recordType=record.recordType,
+                createdAt=record.createdAt.isoformat(),
+                status=record.status,
+                fileCount=len(record.documents),
+                summaryAvailable=len(record.summaries) > 0
+            ))
+        
+        return medical_records
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch medical records: {str(e)}")

@@ -29,8 +29,14 @@ from pathlib import Path
 # Import the ingestion router from src.routes.ingestion_routes with an alias
 from src.routes.ingestion_routes import router as ingestion_router
 
+# Import the dashboard router
+from src.routes.dashboard_routes import router as dashboard_router
+
 # --- Fix import path for evidence_retriever --- #
 from src.services.evidence_retriever import search_pubmed # Corrected path
+
+# --- Import FHIR parsing functionality --- #
+from src.services.ingestion.ehr_parser import parse_fhir_resource, FHIRParsingError
 
 # --- Increase Starlette form part limit --- #
 import starlette.formparsers
@@ -65,8 +71,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Import database client
+from src.database import db_client
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup."""
+    try:
+        # Connect to database
+        await db_client.connect()
+        logger.info("Database connected successfully")
+        
+        # Perform health check
+        health = await db_client.health_check()
+        logger.info(f"Database health: {health}")
+        
+    except Exception as e:
+        logger.error(f"Startup failed: {e}")
+        # Don't exit - allow app to run without database for now
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    try:
+        await db_client.disconnect()
+        logger.info("Database disconnected")
+    except Exception as e:
+        logger.error(f"Shutdown error: {e}")
+
 # Include the ingestion router using the alias
 app.include_router(ingestion_router)
+
+# Include authentication routes
+from src.routes.auth_routes import router as auth_router
+app.include_router(auth_router)
+
+# Include dashboard routes
+app.include_router(dashboard_router)
 
 # --- Pydantic Models ---
 class PubMedQuery(BaseModel):
@@ -83,6 +124,29 @@ class PubMedArticle(BaseModel):
 @app.get("/")
 def read_root():
     return {"message": "AI Health Records API is running!"}
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check including database status."""
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "services": {
+            "api": "healthy"
+        }
+    }
+    
+    # Check database
+    try:
+        db_health = await db_client.health_check()
+        health_status["services"]["database"] = db_health["status"]
+    except Exception as e:
+        health_status["services"]["database"] = "unhealthy"
+        health_status["status"] = "degraded"
+        logger.error(f"Database health check failed: {e}")
+    
+    return health_status
 
 
 # Example endpoint
@@ -250,7 +314,8 @@ async def upload_file(file: UploadFile = File(...)):
                 return {
                     "message": f"Successfully parsed FHIR {file_extension.upper()[1:]} file.",
                     "resource_type": resource_type,
-                    "resource_id": resource_id
+                    "resource_id": resource_id,
+                    "data": fhir_resource.model_dump() if hasattr(fhir_resource, 'model_dump') else str(fhir_resource)
                 }
 
         except FHIRParsingError as e:
