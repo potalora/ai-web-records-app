@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from ..services.auth.auth_service import get_current_user, User
 from ..database.client import db_client
 from ..services.security.encryption import encryption_service
+from ..services.security.audit import audit_service, AccessType
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -170,6 +171,19 @@ async def get_health_summary(
         if not summary:
             return None
         
+        # Log access to health summary for HIPAA compliance
+        try:
+            await audit_service.log_access(
+                user_id=current_user.id,
+                health_record_id=summary.healthRecordId,
+                access_type=AccessType.VIEW,
+                purpose="Dashboard health summary view",
+                ip_address="127.0.0.1"  # TODO: Get real IP from request
+            )
+        except Exception as log_error:
+            # Don't fail the request if logging fails
+            pass
+        
         # Count records analyzed for this summary
         records_count = await db_client.prisma.healthrecord.count(
             where={
@@ -223,6 +237,19 @@ async def get_medical_records(
         
         medical_records = []
         for record in records:
+            # Log access to each medical record for HIPAA compliance
+            try:
+                await audit_service.log_access(
+                    user_id=current_user.id,
+                    health_record_id=record.id,
+                    access_type=AccessType.VIEW,
+                    purpose="Dashboard medical records list view",
+                    ip_address="127.0.0.1"  # TODO: Get real IP from request
+                )
+            except Exception as log_error:
+                # Don't fail the request if logging fails
+                pass
+            
             medical_records.append(MedicalRecord(
                 id=record.id,
                 title=record.title,

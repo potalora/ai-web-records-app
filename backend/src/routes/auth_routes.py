@@ -94,91 +94,59 @@ async def register(request: RegisterRequest, req: Request):
         # Hash password
         hashed_password = password_service.hash_password(request.password)
         
-        # Create user
+        # Create user with proper Prisma client and transaction handling
         logger.info(f"Creating user with email: {request.email}")
-        # Import the UserRole enum from Prisma
         from prisma.enums import UserRole
         
-        # Try with minimal required fields only
-        user_data = {
-            "email": request.email,
-            "password": hashed_password,
-            "role": UserRole.PATIENT
-        }
-        logger.info(f"User data: {user_data}")
-        
         try:
-            # TEMPORARY WORKAROUND: Use raw SQL due to Prisma client issue
-            logger.info("Using raw SQL workaround for user creation")
-            import uuid
-            user_id = str(uuid.uuid4()).replace('-', '')[:25]  # Generate CUID-like ID
-            
-            result = await db_client.prisma.execute_raw(
-                """
-                INSERT INTO "User" (id, email, password, role, "createdAt", "updatedAt")
-                VALUES ($1, $2, $3, 'PATIENT'::"UserRole", NOW(), NOW())
-                RETURNING id, email, role, "createdAt", "updatedAt"
-                """,
-                user_id,
-                request.email,
-                hashed_password
-            )
-            
-            # Create a user-like object for the rest of the code
-            class MockUser:
-                def __init__(self, user_id, email, role):
-                    self.id = user_id
-                    self.email = email
-                    self.role = role
-            
-            user = MockUser(user_id, request.email, "PATIENT")
-            logger.info(f"User created successfully via raw SQL: {user.id}")
-            
+            # Use database transaction for atomic operations
+            async with db_client.prisma.tx() as transaction:
+                # Create user
+                user = await transaction.user.create(
+                    data={
+                        "email": request.email,
+                        "password": hashed_password,
+                        "role": UserRole.PATIENT,
+                        "termsAcceptedAt": datetime.utcnow() if request.acceptTerms else None,
+                        "privacyAcceptedAt": datetime.utcnow() if request.acceptPrivacy else None
+                    }
+                )
+                logger.info(f"User created successfully: {user.id}")
+                
+                # Encrypt personal information
+                encrypted_first_name = encryption_service.encrypt(
+                    request.firstName, purpose="user_profile"
+                )
+                encrypted_last_name = encryption_service.encrypt(
+                    request.lastName, purpose="user_profile"
+                )
+                encrypted_dob = encryption_service.encrypt(
+                    request.dateOfBirth, purpose="user_profile"
+                )
+                
+                encrypted_phone = None
+                if request.phone:
+                    encrypted_phone = encryption_service.encrypt(
+                        request.phone, purpose="user_profile"
+                    )
+                
+                # Create user profile within the same transaction
+                profile = await transaction.userprofile.create(
+                    data={
+                        "userId": user.id,
+                        "firstName": encrypted_first_name["ciphertext"],
+                        "lastName": encrypted_last_name["ciphertext"],
+                        "dateOfBirth": encrypted_dob["ciphertext"],
+                        "phone": encrypted_phone["ciphertext"] if encrypted_phone else None
+                    }
+                )
+                logger.info(f"User profile created successfully: {profile.id}")
+                
         except Exception as db_error:
-            logger.error(f"Database error during user creation: {db_error}")
+            logger.error(f"Database transaction failed during user creation: {db_error}")
             logger.error(f"Error type: {type(db_error)}")
-            raise
-        
-        # Encrypt personal information
-        encrypted_first_name = encryption_service.encrypt(
-            request.firstName, purpose="user_profile"
-        )
-        encrypted_last_name = encryption_service.encrypt(
-            request.lastName, purpose="user_profile"
-        )
-        encrypted_dob = encryption_service.encrypt(
-            request.dateOfBirth, purpose="user_profile"
-        )
-        
-        encrypted_phone = None
-        if request.phone:
-            encrypted_phone = encryption_service.encrypt(
-                request.phone, purpose="user_profile"
-            )
-        
-        # Create user profile with encrypted data using raw SQL workaround
-        try:
-            logger.info("Creating user profile via raw SQL")
-            profile_id = str(uuid.uuid4()).replace('-', '')[:25]  # Generate CUID-like ID
-            
-            await db_client.prisma.execute_raw(
-                """
-                INSERT INTO "UserProfile" (id, "userId", "firstName", "lastName", "dateOfBirth", phone, "createdAt", "updatedAt")
-                VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-                """,
-                profile_id,
-                user.id,
-                encrypted_first_name["ciphertext"],
-                encrypted_last_name["ciphertext"],
-                encrypted_dob["ciphertext"],
-                encrypted_phone["ciphertext"] if encrypted_phone else None
-            )
-            logger.info(f"User profile created successfully via raw SQL: {profile_id}")
-            
-        except Exception as profile_error:
-            logger.error(f"Failed to create user profile: {profile_error}")
-            # Continue without profile for now - user can complete it later
-            pass
+            # Transaction will automatically rollback
+            raise HTTPException(status_code=500, detail="User registration failed")
         
         # Log registration (temporarily disabled for debugging)
         try:

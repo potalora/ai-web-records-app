@@ -73,11 +73,8 @@ class AuditService:
             error_message: Error message if failed
         """
         try:
-            # TEMPORARY: Disable audit logging to isolate registration issues
-            logger.info(f"Audit logging temporarily disabled - would log: {action} on {resource_type}/{resource_id} by user {user_id}")
-            return
-            
-            # Original audit logging code (disabled for debugging)
+            # Re-enabled audit logging with fixes
+            # Original audit logging code
             # Ensure action is a string value (handle both enum and string inputs)
             if hasattr(action, 'value'):
                 action_str = action.value
@@ -147,8 +144,8 @@ class AuditService:
             session_id: Optional session ID
         """
         try:
-            await db_client.prisma.accesslog.create({
-                "data": {
+            await db_client.prisma.accesslog.create(
+                data={
                     "userId": user_id,
                     "healthRecordId": health_record_id,
                     "accessType": access_type,
@@ -156,7 +153,7 @@ class AuditService:
                     "ipAddress": ip_address,
                     "sessionId": session_id
                 }
-            })
+            )
             
             logger.info(
                 f"Access log: User {user_id} accessed record {health_record_id} "

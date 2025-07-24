@@ -20,7 +20,7 @@ from ..services.ingestion.ehr_parser import run_ehr_parsing
 from ..services.auth.auth_service import get_current_user, User
 from ..services.database_service import get_database
 from ..services.security.encryption import encryption_service
-from ..services.security.audit import audit_service, AuditAction
+from ..services.security.audit import audit_service, AuditAction, AccessType
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -298,18 +298,29 @@ async def ingest_files(
                 }
             })
 
-            # Log audit entry
-            await audit_service.log_activity(
+            # Log audit entry for health record creation
+            await audit_service.log_action(
                 user_id=current_user.id,
-                action=AuditAction.CREATE.value,
+                action=AuditAction.CREATE,
                 resource_type="HealthRecord",
                 resource_id=health_record.id,
-                details={
+                ip_address="127.0.0.1",  # TODO: Get real IP from request
+                success=True,
+                new_values={
                     "filename": file.filename,
                     "record_type": final_record_type.value,
                     "batch_id": batch_id,
                     "file_size": file_size
                 }
+            )
+            
+            # Log access for HIPAA compliance (file upload = PHI access)
+            await audit_service.log_access(
+                user_id=current_user.id,
+                health_record_id=health_record.id,
+                access_type=AccessType.API_ACCESS,
+                purpose="File upload - creating new health record",
+                ip_address="127.0.0.1"  # TODO: Get real IP from request
             )
 
             health_record_ids.append(health_record.id)

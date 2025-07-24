@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from src.middleware import SecurityHeadersMiddleware, RateLimitMiddleware, RequestLoggingMiddleware
 import uvicorn
 import os
 import logging
@@ -70,6 +71,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add security middleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=60, auth_requests_per_minute=10)
+app.add_middleware(RequestLoggingMiddleware)
 
 # Import database client
 from src.database import db_client
