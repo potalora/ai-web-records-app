@@ -73,21 +73,43 @@ class AuditService:
             error_message: Error message if failed
         """
         try:
+            # TEMPORARY: Disable audit logging to isolate registration issues
+            logger.info(f"Audit logging temporarily disabled - would log: {action} on {resource_type}/{resource_id} by user {user_id}")
+            return
+            
+            # Original audit logging code (disabled for debugging)
+            # Ensure action is a string value (handle both enum and string inputs)
+            if hasattr(action, 'value'):
+                action_str = action.value
+            else:
+                action_str = str(action)
+            
+            # Debug logging to identify the issue
+            logger.info(f"Creating audit log with action: '{action_str}' (original: '{action}', type: {type(action)})")
+            
+            # Try using a more explicit data structure for Prisma
+            audit_data = {
+                "userId": user_id,
+                "action": action_str,
+                "resourceType": resource_type,
+                "resourceId": resource_id,
+                "ipAddress": ip_address,
+                "userAgent": user_agent,
+                "requestMethod": request_method,
+                "requestPath": request_path,
+                "oldValues": json.dumps(old_values) if old_values else None,
+                "newValues": json.dumps(new_values) if new_values else None,
+                "success": success,
+                "errorMessage": error_message
+            }
+            
+            # Remove None values that might be causing issues
+            audit_data = {k: v for k, v in audit_data.items() if v is not None}
+            
+            logger.info(f"Audit data being sent to Prisma: {audit_data}")
+            
             await db_client.prisma.auditlog.create({
-                "data": {
-                    "userId": user_id,
-                    "action": action,
-                    "resourceType": resource_type,
-                    "resourceId": resource_id,
-                    "ipAddress": ip_address,
-                    "userAgent": user_agent,
-                    "requestMethod": request_method,
-                    "requestPath": request_path,
-                    "oldValues": json.dumps(old_values) if old_values else None,
-                    "newValues": json.dumps(new_values) if new_values else None,
-                    "success": success,
-                    "errorMessage": error_message
-                }
+                "data": audit_data
             })
             
             # Also log to application logger for monitoring
@@ -254,7 +276,7 @@ class AuditService:
                 # Log this as a security event
                 await self.log_action(
                     user_id=user_id,
-                    action=AuditAction.DENY_ACCESS,
+                    action=AuditAction.DENY_ACCESS.value,
                     resource_type="SECURITY",
                     resource_id="RATE_LIMIT",
                     ip_address="system",

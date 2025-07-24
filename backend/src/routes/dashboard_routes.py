@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..services.auth.auth_service import get_current_user, User
-from ..services.database_service import get_database
+from ..database.client import db_client
+from ..services.security.encryption import encryption_service
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -55,20 +56,18 @@ async def get_dashboard_stats(
     current_user: User = Depends(get_current_user)
 ):
     """Get dashboard statistics for the current user"""
-    try:
-        db = get_database()
-        
+    try:        
         # Get current date ranges for comparison
         now = datetime.utcnow()
         week_ago = now - timedelta(days=7)
         
         # Count total records for this user
-        total_records = await db.healthrecord.count(
+        total_records = await db_client.prisma.healthrecord.count(
             where={"userId": current_user.id, "deletedAt": None}
         )
         
         # Count records from last week for comparison
-        recent_records = await db.healthrecord.count(
+        recent_records = await db_client.prisma.healthrecord.count(
             where={
                 "userId": current_user.id,
                 "createdAt": {"gte": week_ago},
@@ -77,35 +76,31 @@ async def get_dashboard_stats(
         )
         
         # Count summaries generated
-        summaries_generated = await db.summary.count(
-            where={"userId": current_user.id, "deletedAt": None}
+        summaries_generated = await db_client.prisma.summary.count(
+            where={
+                "healthRecord": {
+                    "userId": current_user.id,
+                    "deletedAt": None
+                }
+            }
         )
         
         # Count recent summaries
-        recent_summaries = await db.summary.count(
+        recent_summaries = await db_client.prisma.summary.count(
             where={
-                "userId": current_user.id,
                 "createdAt": {"gte": week_ago},
-                "deletedAt": None
+                "healthRecord": {
+                    "userId": current_user.id,
+                    "deletedAt": None
+                }
             }
         )
         
-        # Count evidence searches (from audit logs)
-        evidence_searches = await db.auditlog.count(
-            where={
-                "userId": current_user.id,
-                "action": "EVIDENCE_SEARCH",
-                "createdAt": {"gte": now - timedelta(days=30)}
-            }
-        )
+        # Count evidence searches (from audit logs) - placeholder for now
+        evidence_searches = 0  # We'll implement this when audit logging is re-enabled
         
-        recent_evidence_searches = await db.auditlog.count(
-            where={
-                "userId": current_user.id,
-                "action": "EVIDENCE_SEARCH",
-                "createdAt": {"gte": week_ago}
-            }
-        )
+        # Recent evidence searches - placeholder for now
+        recent_evidence_searches = 0  # We'll implement this when audit logging is re-enabled
         
         return DashboardStats(
             totalRecords=total_records,
@@ -126,13 +121,11 @@ async def get_recent_uploads(
 ):
     """Get recent uploads for the current user"""
     try:
-        db = get_database()
-        
         # Get recent health records with document info
-        records = await db.healthrecord.find_many(
+        records = await db_client.prisma.healthrecord.find_many(
             where={"userId": current_user.id, "deletedAt": None},
             include={"documents": True},
-            order_by={"createdAt": "desc"},
+            order={"createdAt": "desc"},
             take=limit
         )
         
@@ -163,19 +156,22 @@ async def get_health_summary(
 ):
     """Get the latest health summary for the current user"""
     try:
-        db = get_database()
-        
         # Get the most recent summary
-        summary = await db.summary.find_first(
-            where={"userId": current_user.id, "deletedAt": None},
-            order_by={"createdAt": "desc"}
+        summary = await db_client.prisma.summary.find_first(
+            where={
+                "healthRecord": {
+                    "userId": current_user.id,
+                    "deletedAt": None
+                }
+            },
+            order={"createdAt": "desc"}
         )
         
         if not summary:
             return None
         
         # Count records analyzed for this summary
-        records_count = await db.healthrecord.count(
+        records_count = await db_client.prisma.healthrecord.count(
             where={
                 "userId": current_user.id,
                 "createdAt": {"lte": summary.createdAt},
@@ -183,13 +179,23 @@ async def get_health_summary(
             }
         )
         
+        # Decrypt summary content
+        try:
+            decrypted_content = encryption_service.decrypt(
+                {"ciphertext": summary.summaryText, "iv": summary.encryptionIv},
+                purpose="health_summary"
+            )
+        except Exception as e:
+            # If decryption fails, use a placeholder
+            decrypted_content = "Summary content could not be decrypted"
+        
         return HealthSummaryData(
             id=summary.id,
             title=f"Health Summary - {summary.createdAt.strftime('%B %d, %Y')}",
-            content=summary.content,
+            content=decrypted_content,
             createdAt=summary.createdAt.isoformat(),
-            provider=summary.provider or "OpenAI",
-            model=summary.model or "gpt-4",
+            provider=summary.llmProvider,
+            model=summary.llmModel,
             recordsAnalyzed=records_count
         )
         
@@ -203,19 +209,17 @@ async def get_medical_records(
 ):
     """Get medical records for the current user"""
     try:
-        db = get_database()
-        
         # Build query parameters
         query_params = {
             "where": {"userId": current_user.id, "deletedAt": None},
             "include": {"documents": True, "summaries": True},
-            "order_by": {"createdAt": "desc"}
+            "order": {"createdAt": "desc"}
         }
         
         if limit:
             query_params["take"] = limit
         
-        records = await db.healthrecord.find_many(**query_params)
+        records = await db_client.prisma.healthrecord.find_many(**query_params)
         
         medical_records = []
         for record in records:

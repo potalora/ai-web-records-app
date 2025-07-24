@@ -66,16 +66,19 @@ class SessionService:
             # Check if account is locked
             if user.accountLocked:
                 logger.warning(f"Login attempt for locked account: {email}")
-                await audit_service.log_action(
-                    user_id=user.id,
-                    action=AuditAction.DENY_ACCESS,
-                    resource_type="Session",
-                    resource_id="LOGIN",
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    success=False,
-                    error_message="Account locked"
-                )
+                try:
+                    await audit_service.log_action(
+                        user_id=user.id,
+                        action=AuditAction.DENY_ACCESS.value,
+                        resource_type="Session",
+                        resource_id="LOGIN",
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                        success=False,
+                        error_message="Account locked"
+                    )
+                except Exception as audit_error:
+                    logger.warning(f"Audit logging failed for locked account access: {audit_error}")
                 return None
             
             # Verify password
@@ -100,16 +103,19 @@ class SessionService:
                         data={"failedLoginCount": failed_count}
                     )
                 
-                await audit_service.log_action(
-                    user_id=user.id,
-                    action=AuditAction.LOGIN,
-                    resource_type="Session",
-                    resource_id="LOGIN",
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    success=False,
-                    error_message="Invalid password"
-                )
+                try:
+                    await audit_service.log_action(
+                        user_id=user.id,
+                        action=AuditAction.LOGIN.value,
+                        resource_type="Session",
+                        resource_id="LOGIN",
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                        success=False,
+                        error_message="Invalid password"
+                    )
+                except Exception as audit_error:
+                    logger.warning(f"Audit logging failed for invalid password attempt: {audit_error}")
                 
                 return None
             
@@ -148,16 +154,20 @@ class SessionService:
                 }
             )
             
-            # Log successful login
-            await audit_service.log_action(
-                user_id=user.id,
-                action=AuditAction.LOGIN,
-                resource_type="Session",
-                resource_id=session.id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                success=True
-            )
+            # Log successful login (temporarily disabled for debugging)
+            try:
+                await audit_service.log_action(
+                    user_id=user.id,
+                    action=AuditAction.LOGIN.value,
+                    resource_type="Session",
+                    resource_id=session.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    success=True
+                )
+            except Exception as audit_error:
+                logger.warning(f"Audit logging failed during login: {audit_error}")
+                pass
             
             return {
                 "token": session_token,
@@ -256,14 +266,17 @@ class SessionService:
             )
             
             # Log logout
-            await audit_service.log_action(
-                user_id=user_id,
-                action=AuditAction.LOGOUT,
-                resource_type="Session",
-                resource_id="LOGOUT",
-                ip_address=ip_address,
-                success=True
-            )
+            try:
+                await audit_service.log_action(
+                    user_id=user_id,
+                    action=AuditAction.LOGOUT.value,
+                    resource_type="Session",
+                    resource_id="LOGOUT",
+                    ip_address=ip_address,
+                    success=True
+                )
+            except Exception as audit_error:
+                logger.warning(f"Audit logging failed for logout: {audit_error}")
             
             return result.count > 0
             
@@ -319,15 +332,18 @@ class SessionService:
                     f"Invalidated {result.count} sessions for user {user_id}: {reason}"
                 )
                 
-                await audit_service.log_action(
-                    user_id=user_id,
-                    action=AuditAction.LOGOUT,
-                    resource_type="Session",
-                    resource_id="ALL_SESSIONS",
-                    ip_address="system",
-                    success=True,
-                    error_message=f"All sessions invalidated: {reason}"
-                )
+                try:
+                    await audit_service.log_action(
+                        user_id=user_id,
+                        action=AuditAction.LOGOUT.value,
+                        resource_type="Session",
+                        resource_id="ALL_SESSIONS",
+                        ip_address="system",
+                        success=True,
+                        error_message=f"All sessions invalidated: {reason}"
+                    )
+                except Exception as audit_error:
+                    logger.warning(f"Audit logging failed for session invalidation: {audit_error}")
             
             return result.count
             

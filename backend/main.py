@@ -317,7 +317,7 @@ async def summarize_pdf(
         # Log audit entries
         await audit_service.log_activity(
             user_id=current_user.id,
-            action=AuditAction.CREATE,
+            action=AuditAction.CREATE.value,
             resource_type="HealthRecord",
             resource_id=health_record.id,
             details={
@@ -329,7 +329,7 @@ async def summarize_pdf(
         
         await audit_service.log_activity(
             user_id=current_user.id,
-            action=AuditAction.CREATE,
+            action=AuditAction.CREATE.value,
             resource_type="Summary",
             resource_id=summary_record.id,
             details={
@@ -487,7 +487,7 @@ async def upload_file(
                 # Log audit entry
                 await audit_service.log_activity(
                     user_id=current_user.id,
-                    action=AuditAction.CREATE,
+                    action=AuditAction.CREATE.value,
                     resource_type="HealthRecord",
                     resource_id=health_record.id,
                     details={
@@ -572,7 +572,7 @@ async def upload_file(
             # Log audit entry
             await audit_service.log_activity(
                 user_id=current_user.id,
-                action=AuditAction.CREATE,
+                action=AuditAction.CREATE.value,
                 resource_type="HealthRecord",
                 resource_id=health_record.id,
                 details={

@@ -22,7 +22,7 @@ export default function DashboardPage() {
     loading: statsLoading,
     execute: fetchStats,
     error: statsError
-  } = useApi(apiClient.getDashboardStats);
+  } = useApi(() => apiClient.getDashboardStats());
 
   useEffect(() => {
     fetchStats();

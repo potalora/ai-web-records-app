@@ -11,6 +11,7 @@ import logging
 
 from ...database.client import db_client
 from ..security.session import session_service
+from ..security.encryption import encryption_service
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
@@ -45,7 +46,7 @@ async def get_current_user(
         
         # Get user from database
         user_record = await db_client.prisma.user.find_unique(
-            where={"id": session_data["user_id"]},
+            where={"id": session_data["user"].id},
             include={"profile": True}
         )
         
@@ -57,17 +58,37 @@ async def get_current_user(
         
         # Update last activity
         await db_client.prisma.usersession.update(
-            where={"sessionToken": session_service.hash_token(token)},
+            where={"id": session_data["session_id"]},
             data={"lastActivity": datetime.utcnow()}
         )
         
+        # Decrypt profile data if available
+        firstName = None
+        lastName = None
+        if user_record.profile:
+            try:
+                if user_record.profile.firstName:
+                    firstName = encryption_service.decrypt(
+                        {"ciphertext": user_record.profile.firstName},
+                        purpose="user_profile"
+                    )
+                if user_record.profile.lastName:
+                    lastName = encryption_service.decrypt(
+                        {"ciphertext": user_record.profile.lastName},
+                        purpose="user_profile"
+                    )
+            except Exception as decrypt_error:
+                logger.warning(f"Failed to decrypt profile data: {decrypt_error}")
+                # Continue without names
+                pass
+
         # Return user model
         return User(
             id=user_record.id,
             email=user_record.email,
             role=user_record.role,
-            firstName=user_record.profile.firstName if user_record.profile else None,
-            lastName=user_record.profile.lastName if user_record.profile else None,
+            firstName=firstName,
+            lastName=lastName,
             createdAt=user_record.createdAt.isoformat()
         )
         

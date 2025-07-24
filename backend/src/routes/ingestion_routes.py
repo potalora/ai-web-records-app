@@ -132,7 +132,7 @@ async def ingest_text_file(
         # Log the activity for audit
         await audit_service.log_activity(
             user_id=current_user.id,
-            action=AuditAction.CREATE,
+            action=AuditAction.CREATE.value,
             resource_type="HealthRecord",
             resource_id=health_record.id,
             details={"filename": file.filename, "record_type": record_type.value}
@@ -301,7 +301,7 @@ async def ingest_files(
             # Log audit entry
             await audit_service.log_activity(
                 user_id=current_user.id,
-                action=AuditAction.CREATE,
+                action=AuditAction.CREATE.value,
                 resource_type="HealthRecord",
                 resource_id=health_record.id,
                 details={
