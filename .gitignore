@@ -192,10 +192,21 @@ Thumbs.db
 
 # Sensitive Files (Example - ensure .env is handled above)
 # secrets.yaml
+keys/
+backend/keys/
 
 # Large Data/Output Directories (use relative paths inside project if needed)
 # data/
 # output/
+
+# Development test scripts
+backend/test_*.py
+backend/check_*.py
+
+# Screenshots and images
+*.png
+*.jpg
+*.jpeg
 
 # Keep poetry.lock (recommended)
 poetry.lock
